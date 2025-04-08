@@ -1597,7 +1597,7 @@ dependencies = [
 [[package]]
 name = "hyperprocess_macro"
 version = "0.1.0"
-source = "git+https://github.com/hyperware-ai/hyperprocess-macro#c847a1e7b1f4c3018399617de1c175ae93492f6b"
+source = "git+https://github.com/hyperware-ai/hyperprocess-macro?rev=9198c1e#9198c1ee1a0e7fa18b922192e1fdec26b98f3c79"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1620,7 +1620,7 @@ dependencies = [
 [[package]]
 name = "hyperware_app_common"
 version = "0.1.0"
-source = "git+https://github.com/hyperware-ai/hyperprocess-macro#c847a1e7b1f4c3018399617de1c175ae93492f6b"
+source = "git+https://github.com/hyperware-ai/hyperprocess-macro?rev=9198c1e#9198c1ee1a0e7fa18b922192e1fdec26b98f3c79"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1638,9 +1638,8 @@ dependencies = [
 
 [[package]]
 name = "hyperware_process_lib"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "572247e1810eccc6197799ea4d9944751a62251d2fb6afa17ca88e16b30c22b9"
+version = "1.0.6"
+source = "git+https://github.com/hyperware-ai/process_lib?rev=42feacc#42feaccb4b134e453365af436e40445db988a3ee"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -2933,7 +2932,6 @@ dependencies = [
  "anyhow",
  "hyperprocess_macro",
  "hyperware_app_common",
- "hyperware_process_lib",
  "process_macros",
  "rmp-serde",
  "serde",

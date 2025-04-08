@@ -1,55 +1,71 @@
 use anyhow::anyhow;
 
 //use crate::hyperware::process::sign;
+use hyperware_app_common::hyperware_process_lib as hyperware_process_lib;
 use hyperware_process_lib::logging::{init_logging, Level};
 use hyperware_process_lib::net::{NetAction, NetResponse};
-use hyperware_process_lib::{
-    our, Address, LazyLoadBlob, Request,
-};
+use hyperware_process_lib::{get_blob, our, LazyLoadBlob, Request};
 
-//use hyperware_app_common::send;
+use hyperware_app_common::{send, SendResult};
 use hyperprocess_macro::hyperprocess;
 
 #[derive(Default, Debug, serde::Serialize, serde::Deserialize)]
 struct SignState {}
 
 async fn sign(message: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-    let message = make_message(source, &message);
+    let message = make_message(&message);
+    let body = rmp_serde::to_vec(&NetAction::Sign)?;
 
-    let res = Request::to(("our", "net", "distro", "sys"))
+    let req = Request::to(("our", "net", "distro", "sys"))
         .blob(LazyLoadBlob {
             mime: None,
             bytes: message,
         })
-        .body(body)
-        .send_and_await_response(10)??;
+        .body(body);
 
-    let Ok(NetResponse::Signed) = rmp_serde::from_slice::<NetResponse>(res.body()) else {
+    // TODO
+    let resp: Vec<u8> = match send(req).await {
+        SendResult::Success(r) => r,
+        SendResult::Timeout => return Err(anyhow!("timeout")),
+        SendResult::Offline => return Err(anyhow!("offline")),
+        SendResult::DeserializationError(e) => return Err(anyhow!(e)),
+        SendResult::BuildError(e) => return Err(anyhow!("{e}")),
+    };
+
+    let Ok(NetResponse::Signed) = rmp_serde::from_slice::<NetResponse>(&resp) else {
         return Err(anyhow!("signature failed"));
     };
-    let Some(signature) = res.blob() else {
+    let Some(signature) = get_blob() else {
         return Err(anyhow!("no blob"));
     };
 
-    Ok(signature)
+    Ok(signature.bytes)
 }
 
 async fn verify(message: Vec<u8>, signature: Vec<u8>) -> anyhow::Result<bool> {
-    let message = make_message(source, &message);
+    let message = make_message(&message);
     let body = rmp_serde::to_vec(&NetAction::Verify {
         from: our(),
         signature,
     })?;
 
-    let res = Request::to(("our", "net", "distro", "sys"))
+    let req = Request::to(("our", "net", "distro", "sys"))
         .blob(LazyLoadBlob {
             mime: None,
             bytes: message,
         })
-        .body(body)
-        .send_and_await_response(10)??;
+        .body(body);
 
-    let resp = rmp_serde::from_slice::<NetResponse>(res.body())?;
+    // TODO
+    let resp: Vec<u8> = match send(req).await {
+        SendResult::Success(r) => r,
+        SendResult::Timeout => return Err(anyhow!("timeout")),
+        SendResult::Offline => return Err(anyhow!("offline")),
+        SendResult::DeserializationError(e) => return Err(anyhow!(e)),
+        SendResult::BuildError(e) => return Err(anyhow!("{e}")),
+    };
+
+    let resp = rmp_serde::from_slice::<NetResponse>(&resp)?;
 
     match resp {
         NetResponse::Verified(is_good) => {
@@ -68,8 +84,8 @@ async fn verify(message: Vec<u8>, signature: Vec<u8>) -> anyhow::Result<bool> {
 /// so final message to be signed looks like
 ///
 /// [sign-address, source, bytes].concat()
-fn make_message(source: &Address, bytes: &Vec<u8>) -> Vec<u8> {
-    [source.to_string().as_bytes(), &bytes].concat()
+fn make_message(bytes: &Vec<u8>) -> Vec<u8> {
+    [source().to_string().as_bytes(), &bytes].concat()
 }
 
 #[hyperprocess(
@@ -89,7 +105,7 @@ impl SignState {
     async fn sign(&mut self, message: Vec<u8>) -> Result<Vec<u8>, String> {
         match sign(message).await {
             Ok(s) => Ok(s),
-            Err(e) => Err(e.to_string),
+            Err(e) => Err(e.to_string()),
         }
     }
 

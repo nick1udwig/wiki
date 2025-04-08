@@ -8,9 +8,9 @@ simulation-mode = []
 
 [dependencies]
 anyhow = "1.0.97"
-hyperware_app_common = { git = "https://github.com/hyperware-ai/hyperprocess-macro" }
-hyperprocess_macro = { git = "https://github.com/hyperware-ai/hyperprocess-macro" }
-hyperware_process_lib = { version = "1.0.4", features = ["logging"] }
+hyperware_app_common = { git = "https://github.com/hyperware-ai/hyperprocess-macro", rev = "9198c1e" }
+hyperprocess_macro = { git = "https://github.com/hyperware-ai/hyperprocess-macro", rev = "9198c1e" }
+#hyperware_process_lib = { version = "1.0.4", features = ["logging"] }
 process_macros = "0.1"
 rmp-serde = "1.3.0"
 serde = { version = "1.0", features = ["derive"] }
