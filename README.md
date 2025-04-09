@@ -21,7 +21,26 @@ kit b --hyperapp
 
 ## Current state & TODOs
 
-1. Compilation is working as of [kit@4ad1b14](https://github.com/hyperware-ai/kit/pull/312/commits/4ad1b14bd730c210040757e8eed4e25d70ba6955),
-2. No promises as to functionality yet,
-3. Next step is to add `caller-utils` generation into the dependency system and write a minimal app that calls `sign:sign:sys`,
-4. Subsequent step is to probably rip out the `SendResult` and make it into an actual `Result`.
+1. Working end-to-end with [id](https://github.com/nick1udwig/id) as of [kit@] [sign@] [id@].
+2. Use as follows:
+   ```
+   # Get proper version of kit
+   cargo install --git https://github.com/hyperware-ai/kit --locked --branch hf/build-add-hyper-bindgen
+
+   # Start fake node
+   kit f
+
+   # In new terminal
+   git clone https://github.com/nick1udwig/sign.git
+   cd sign
+   kit b --hyperapp
+   kit s
+   cd ..
+
+   git clone https://github.com/nick1udwig/id.git
+   cd id
+   kit b --hyperapp -p 8080
+   kit s
+   cd ..
+   ```
+   Then open localhost:8080/id:id:sys and set your fake node terminal to Event Loop verbosity (hit Ctrl + V 3 times in the fake node terminal).
