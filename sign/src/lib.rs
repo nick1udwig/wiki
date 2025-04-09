@@ -4,9 +4,9 @@ use anyhow::anyhow;
 use hyperware_app_common::hyperware_process_lib as hyperware_process_lib;
 use hyperware_process_lib::logging::{init_logging, Level};
 use hyperware_process_lib::net::{NetAction, NetResponse};
-use hyperware_process_lib::{get_blob, our, LazyLoadBlob, Request};
+use hyperware_process_lib::{last_blob, our, LazyLoadBlob, Request};
 
-use hyperware_app_common::{send, SendResult};
+use hyperware_app_common::{send_rmp, SendResult};
 use hyperprocess_macro::hyperprocess;
 
 #[derive(Default, Debug, serde::Serialize, serde::Deserialize)]
@@ -17,6 +17,7 @@ async fn sign(message: Vec<u8>) -> anyhow::Result<Vec<u8>> {
     let body = rmp_serde::to_vec(&NetAction::Sign)?;
 
     let req = Request::to(("our", "net", "distro", "sys"))
+        .expects_response(5)
         .blob(LazyLoadBlob {
             mime: None,
             bytes: message,
@@ -24,7 +25,7 @@ async fn sign(message: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         .body(body);
 
     // TODO
-    let resp: Vec<u8> = match send(req).await {
+    let _resp: NetResponse = match send_rmp(req).await {
         SendResult::Success(r) => r,
         SendResult::Timeout => return Err(anyhow!("timeout")),
         SendResult::Offline => return Err(anyhow!("offline")),
@@ -32,10 +33,7 @@ async fn sign(message: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         SendResult::BuildError(e) => return Err(anyhow!("{e}")),
     };
 
-    let Ok(NetResponse::Signed) = rmp_serde::from_slice::<NetResponse>(&resp) else {
-        return Err(anyhow!("signature failed"));
-    };
-    let Some(signature) = get_blob() else {
+    let Some(signature) = last_blob() else {
         return Err(anyhow!("no blob"));
     };
 
@@ -50,6 +48,7 @@ async fn verify(message: Vec<u8>, signature: Vec<u8>) -> anyhow::Result<bool> {
     })?;
 
     let req = Request::to(("our", "net", "distro", "sys"))
+        .expects_response(5)
         .blob(LazyLoadBlob {
             mime: None,
             bytes: message,
@@ -57,15 +56,13 @@ async fn verify(message: Vec<u8>, signature: Vec<u8>) -> anyhow::Result<bool> {
         .body(body);
 
     // TODO
-    let resp: Vec<u8> = match send(req).await {
+    let resp: NetResponse = match send_rmp(req).await {
         SendResult::Success(r) => r,
         SendResult::Timeout => return Err(anyhow!("timeout")),
         SendResult::Offline => return Err(anyhow!("offline")),
         SendResult::DeserializationError(e) => return Err(anyhow!(e)),
         SendResult::BuildError(e) => return Err(anyhow!("{e}")),
     };
-
-    let resp = rmp_serde::from_slice::<NetResponse>(&resp)?;
 
     match resp {
         NetResponse::Verified(is_good) => {

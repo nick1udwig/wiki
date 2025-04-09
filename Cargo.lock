@@ -1597,7 +1597,7 @@ dependencies = [
 [[package]]
 name = "hyperprocess_macro"
 version = "0.1.0"
-source = "git+https://github.com/hyperware-ai/hyperprocess-macro?rev=4e417e1#4e417e17bdabd9f631137657dcac87ae1ffa53ed"
+source = "git+https://github.com/hyperware-ai/hyperprocess-macro?rev=f29952f#f29952f01846017ac943a2bcc660717ede9f94e4"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1620,7 +1620,7 @@ dependencies = [
 [[package]]
 name = "hyperware_app_common"
 version = "0.1.0"
-source = "git+https://github.com/hyperware-ai/hyperprocess-macro?rev=4e417e1#4e417e17bdabd9f631137657dcac87ae1ffa53ed"
+source = "git+https://github.com/hyperware-ai/hyperprocess-macro?rev=f29952f#f29952f01846017ac943a2bcc660717ede9f94e4"
 dependencies = [
  "anyhow",
  "futures-util",
