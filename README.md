@@ -21,7 +21,7 @@ kit b --hyperapp
 
 ## Current state & TODOs
 
-1. Working end-to-end with [id](https://github.com/nick1udwig/id) as of [kit@] [sign@] [id@].
+1. Working end-to-end with [id](https://github.com/nick1udwig/id) as of [kit@3984259](https://github.com/hyperware-ai/kit/pull/312/commits/39842593e3cd4288823da93bff3658d7e1fdd84a) [sign@9570dbc](https://github.com/nick1udwig/sign/commit/9570dbc9cb0fbcd49eab9af692b1689dd5b23d2d) [id@6dd79d5](https://github.com/nick1udwig/id/commit/6dd79d591c1b98bbdc237c1558e6604136f12178).
 2. Use as follows:
    ```
    # Get proper version of kit
