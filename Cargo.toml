@@ -1,10 +1,11 @@
+[profile.release]
+lto = true
+opt-level = "s"
+panic = "abort"
+
 [workspace]
-resolver = "2"
 members = [
     "sign",
+    "target/caller-utils",
 ]
-
-[profile.release]
-panic = "abort"
-opt-level = "s"
-lto = true
+resolver = "2"

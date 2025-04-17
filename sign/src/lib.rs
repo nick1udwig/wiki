@@ -1,12 +1,11 @@
 use anyhow::anyhow;
 
-//use crate::hyperware::process::sign;
 use hyperware_app_common::hyperware_process_lib as hyperware_process_lib;
 use hyperware_process_lib::logging::{init_logging, Level};
 use hyperware_process_lib::net::{NetAction, NetResponse};
 use hyperware_process_lib::{last_blob, our, LazyLoadBlob, Request};
 
-use hyperware_app_common::{send_rmp, SendResult};
+use hyperware_app_common::send_rmp;
 use hyperprocess_macro::hyperprocess;
 
 #[derive(Default, Debug, serde::Serialize, serde::Deserialize)]
@@ -24,14 +23,7 @@ async fn sign(message: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         })
         .body(body);
 
-    // TODO
-    let _resp: NetResponse = match send_rmp(req).await {
-        SendResult::Success(r) => r,
-        SendResult::Timeout => return Err(anyhow!("timeout")),
-        SendResult::Offline => return Err(anyhow!("offline")),
-        SendResult::DeserializationError(e) => return Err(anyhow!(e)),
-        SendResult::BuildError(e) => return Err(anyhow!("{e}")),
-    };
+    let _resp: NetResponse = send_rmp(req).await?;
 
     let Some(signature) = last_blob() else {
         return Err(anyhow!("no blob"));
@@ -55,14 +47,7 @@ async fn verify(message: Vec<u8>, signature: Vec<u8>) -> anyhow::Result<bool> {
         })
         .body(body);
 
-    // TODO
-    let resp: NetResponse = match send_rmp(req).await {
-        SendResult::Success(r) => r,
-        SendResult::Timeout => return Err(anyhow!("timeout")),
-        SendResult::Offline => return Err(anyhow!("offline")),
-        SendResult::DeserializationError(e) => return Err(anyhow!(e)),
-        SendResult::BuildError(e) => return Err(anyhow!("{e}")),
-    };
+    let resp: NetResponse = send_rmp(req).await?;
 
     match resp {
         NetResponse::Verified(is_good) => {
