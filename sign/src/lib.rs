@@ -84,17 +84,11 @@ impl SignState {
 
     #[local]
     async fn sign(&mut self, message: Vec<u8>) -> Result<Vec<u8>, String> {
-        match sign(message).await {
-            Ok(s) => Ok(s),
-            Err(e) => Err(e.to_string()),
-        }
+        sign(message).await.map_err(|e| e.to_string())
     }
 
     #[local]
     async fn verify(&mut self, message: Vec<u8>, signature: Vec<u8>) -> Result<bool, String> {
-        match verify(message, signature).await {
-            Ok(v) => Ok(v),
-            Err(e) => Err(e.to_string()),
-        }
+        verify(message, signature).await.map_err(|e| e.to_string())
     }
 }
