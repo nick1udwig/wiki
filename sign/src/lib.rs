@@ -1,6 +1,5 @@
 use anyhow::anyhow;
 
-use hyperware_app_common::hyperware_process_lib as hyperware_process_lib;
 use hyperware_process_lib::logging::{init_logging, Level};
 use hyperware_process_lib::net::{NetAction, NetResponse};
 use hyperware_process_lib::{last_blob, our, LazyLoadBlob, Request};
