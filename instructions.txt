@@ -1,0 +1,34 @@
+# instructions.txt
+
+## Goal
+Decentralized wiki
+
+A wiki is synced between participants p2p over the hyperware network. It syncs using the yrs crdt library. One possible protocol:
+1. Editor clicks “save” on frontend
+2. Editor’s node sends a ping to other nodes informing them an update has occurred
+3. Each participant sends their statevector https://docs.rs/yrs/latest/yrs/trait.ReadTxn.html#method.state_vector
+4. Editor computes diff per participant (can possibly be cached) https://docs.rs/yrs/latest/yrs/trait.ReadTxn.html#method.encode_diff
+5. Participant applies update https://docs.rs/yrs/latest/yrs/struct.TransactionMut.html#method.apply_update
+
+State consists of a map: path to vector of page history
+
+There are different roles on a wiki: reader, writer, admin, superadmin. Admin can add new members, kick members, change permissions. Superadmin cannot be kicked by admins
+
+The ui consists of a front page that allows users to create new wikis or manage existing wikis (eg join public wikis, leave current wikis, or, if an admin, invite/kick members or toggle the wiki from private (default) to public). Clicking into a wiki shows the wiki page: an index of that wiki’s pages and a search over the wiki. Writer+ roles can edit a page (have an edit button that only appears for them). Pages should be markdown. The markdown editor has a Save button that, when clicked, sends an update ping to members. The markdown editor also has a preview button
+
+Public wikis are also served by nodes over http
+
+## Important Constraints
+* **No Custom WIT Types:** The Hyperware build system does **not** support custom types like "date-time" in WIT definitions. You **must** use standard WIT-compatible types (e.g., `string`, `u64`) in your Rust structs that get exposed via WIT. For timestamps, we will use `string`. The build framework will generate WIT types based on function signatures automatically.
+* **Agent Limitations:** Remember, you (Claude Code) are an agent that only writes code based on these instructions. Do **not** run any `kit` commands and do **not** write or run any tests. The user will handle building and testing.
+* **File Structure:** Work within the provided `samchat` folder structure [source: 4]. Modify existing files as needed [source: 5].
+
+## Core Framework Concepts (Review `resources/app-framework.md` and `resources/llm-generated-app-guide.md` for details)
+* **Backend (`src/lib.rs`):** Uses Rust and the `hyperprocess` macro [source: 6]. State is defined in the struct associated with the macro. Handlers (`#[http]`, `#[remote]`, `#[local]`) define the API [source: 6].
+* **Frontend (`ui/src/`):** Uses TypeScript and React/Vite [source: 7]. Communicates with the backend via HTTP requests [source: 9]. State is managed with Zustand [source: 8].
+* **Communication:**
+    * UI -> Backend: Standard HTTP POST requests to `/api` [source: 9, 112].
+    * Backend -> Backend (P2P): Uses `Request::new().target(...).send()` [source: 10]. Incoming P2P messages handled by `#[remote]` [source: 10].
+* **Persistence:** Backend state (`SamchatState` struct) saved based on `save_config` [source: 11].
+
+## Step-by-Step Instructions:

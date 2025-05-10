@@ -1,9 +1,9 @@
 [
   {
-    "process_name": "sign",
-    "process_wasm_path": "/sign.wasm",
+    "process_name": "wiki",
+    "process_wasm_path": "/wiki.wasm",
     "on_exit": "Restart",
-    "request_networking": false,
+    "request_networking": true,
     "request_capabilities": ["net:distro:sys", "vfs:distro:sys"],
     "grant_capabilities": ["net:distro:sys", "vfs:distro:sys"],
     "public": false

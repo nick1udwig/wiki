@@ -1,11 +1,11 @@
 {
-  "name": "Sign",
-  "description": "Sign messages with Hyperware",
+  "name": "wiki",
+  "description": "decentralized CRDT-mirrored wiki",
   "image": "",
   "properties": {
-    "package_name": "sign",
+    "package_name": "wiki",
     "current_version": "1.0.0",
-    "publisher": "sys",
+    "publisher": "nick.hypr",
     "mirrors": [],
     "code_hashes": {
       "1.0.0": ""
@@ -13,6 +13,6 @@
     "wit_version": 1,
     "dependencies": []
   },
-  "external_url": "https://hyperware.ai",
+  "external_url": "https://github.com/nick1udwig/wiki",
   "animation_url": ""
 }

@@ -1,0 +1,978 @@
+# instructions.txt
+
+## Goal
+
+Decentralized wiki
+
+A wiki is synced between participants p2p over the hyperware network. [cite: 16868]
+It syncs using the yrs crdt library. One possible protocol:
+
+1.  Editor clicks “save” on frontend
+2.  Editor’s node sends a ping to other nodes informing them an update has occurred
+3.  Each participant sends their statevector [https://docs.rs/yrs/latest/yrs/trait.ReadTxn.html\#method.state\_vector](https://www.google.com/search?q=https://docs.rs/yrs/latest/yrs/trait.ReadTxn.html%23method.state_vector)
+4.  Editor computes diff per participant (can possibly be cached) [https://docs.rs/yrs/latest/yrs/trait.ReadTxn.html\#method.encode\_diff](https://www.google.com/search?q=https://docs.rs/yrs/latest/yrs/trait.ReadTxn.html%23method.encode_diff)
+5.  Participant applies update [https://docs.rs/yrs/latest/yrs/struct.TransactionMut.html\#method.apply\_update](https://www.google.com/search?q=https://docs.rs/yrs/latest/yrs/struct.TransactionMut.html%23method.apply_update) [cite: 16869]
+
+State consists of a map: path to vector of page history
+
+There are different roles on a wiki: reader, writer, admin, superadmin.
+Admin can add new members, kick members, change permissions. Superadmin cannot be kicked by admins [cite: 16870]
+
+The ui consists of a front page that allows users to create new wikis or manage existing wikis (eg join public wikis, leave current wikis, or, if an admin, invite/kick members or toggle the wiki from private (default) to public). [cite: 16870]
+Clicking into a wiki shows the wiki page: an index of that wiki’s pages and a search over the wiki. [cite: 16871]
+Writer+ roles can edit a page (have an edit button that only appears for them). Pages should be markdown. [cite: 16872]
+The markdown editor has a Save button that, when clicked, sends an update ping to members. [cite: 16873]
+The markdown editor also has a preview button [cite: 16874]
+
+Public wikis are also served by nodes over http
+
+## Important Constraints
+
+  * **No Custom WIT Types:** The Hyperware build system does **not** support custom types like "date-time" in WIT definitions.
+    You **must** use standard WIT-compatible types (e.g., `string`, `u64`) in your Rust structs that get exposed via WIT. [cite: 16875]
+    For timestamps, we will use `string`. The build framework will generate WIT types based on function signatures automatically. [cite: 16876]
+  * **Agent Limitations:** Remember, you (Claude Code) are an agent that only writes code based on these instructions. [cite: 16877]
+    Do **not** run any `kit` commands and do **not** write or run any tests. [cite: 16878]
+    The user will handle building and testing. [cite: 16879]
+  * **File Structure:** Work within the provided `samchat` folder structure . [cite: 16879]
+    Modify existing files as needed . [cite: 16880]
+
+## Core Framework Concepts (Review `resources/app-framework.md` and `resources/llm-generated-app-guide.md` for details)
+
+  * **Backend (`src/lib.rs`):** Uses Rust and the `hyperprocess` macro . [cite: 16880]
+    State is defined in the struct associated with the macro. Handlers (`#[http]`, `#[remote]`, `#[local]`) define the API . [cite: 16881]
+  * **Frontend (`ui/src/`):** Uses TypeScript and React/Vite . Communicates with the backend via HTTP requests . [cite: 16882]
+    State is managed with Zustand . [cite: 16883]
+  * **Communication:**
+      * UI -\> Backend: Standard HTTP POST requests to `/api` . [cite: 16883]
+      * Backend -\> Backend (P2P): Uses `Request::new().target(...).send()` . Incoming P2P messages handled by `#[remote]` . [cite: 16884]
+  * **Persistence:** Backend state (`SamchatState` struct) saved based on `save_config` . [cite: 16885]
+
+## Detailed Step-by-Step Implementation Plan
+
+This plan outlines the steps to create the decentralized wiki.
+
+### Phase 1: Core Data Structures and Process Setup
+
+**Step 1.1: Define Core Data Structures in `src/lib.rs`**
+
+  * **`WikiPage`**: Represents a single page in the wiki.
+      * `path`: `String` - Unique identifier for the page (e.g., "/home", "/topics/technology").
+      * `content`: `String` - The markdown content of the page.
+      * `history`: `Vec<WikiPageVersion>` - History of page changes (initially can be simple, later integrate Yrs).
+      * `last_modified_by`: `String` - Node ID of the last editor.
+      * `last_modified_at`: `String` - Timestamp of the last modification (use `string` as per constraints).
+  * **`WikiPageVersion`**: Represents a version of a page.
+      * `version_id`: `String` - Unique ID for this version.
+      * `timestamp`: `String` - Timestamp of this version.
+      * `editor_id`: `String` - Node ID of the editor for this version.
+      * `content_diff_or_snapshot`: `Vec<u8>` - For Yrs, this will store diffs or snapshots.
+  * **`WikiMembership`**: Defines user roles within a specific wiki.
+      * `user_id`: `String` - Node ID of the user.
+      * `role`: `WikiRole` - Role of the user in this wiki.
+  * **`Wiki`**: Represents an individual wiki.
+      * `id`: `String` - Unique identifier for the wiki.
+      * `name`: `String` - Human-readable name of the wiki.
+      * `pages`: `std::collections::HashMap<String, yrs::Doc>` - Map of page paths to their Yrs documents.
+      * `members`: `std::collections::HashMap<String, WikiMembership>` - Node ID to membership details.
+      * `is_public`: `bool` - Whether the wiki is public or private.
+      * `owner_id`: `String` - Node ID of the wiki creator/superadmin.
+  * **`WikiRole`**: Enum for user roles.
+      * `Reader`, `Writer`, `Admin`, `SuperAdmin`.
+  * **`WikiState`**: The main state for the Hyperware process.
+      * `node_id`: `String` - The ID of the current node.
+      * `wikis`: `std::collections::HashMap<String, Wiki>` - Map of wiki IDs to `Wiki` objects.
+      * `known_peers`: `std::collections::HashSet<String>` - Set of known peer node IDs.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (Illustrative snippets)
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use yrs::{Doc, ReadTxn, Transact, Update}; // For Yrs integration
+
+// Reminder: No custom WIT types like date-time. Use String for timestamps.
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum WikiRole {
+    Reader,
+    Writer,
+    Admin,
+    SuperAdmin,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WikiPageVersion {
+    version_id: String, // e.g., a hash of content or a sequence number
+    timestamp: String,  // ISO 8601 format string
+    editor_id: String,  // Node ID
+    // For Yrs, the Doc itself handles versions. This might be simplified
+    // or used for metadata about major save points if needed.
+    // For now, let Yrs Doc manage the actual content versions.
+}
+
+// The WikiPage content will be managed by yrs::Text within a yrs::Doc
+// We might not need a separate WikiPage struct if yrs::Doc directly maps to a page path.
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WikiMembership {
+    user_id: String, // Node ID
+    role: WikiRole,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Wiki {
+    id: String, // Unique ID for the wiki
+    name: String,
+    // Each page path maps to its own Yrs document for CRDT sync.
+    // The `Vec<u8>` will store the serialized Yrs Doc state for persistence.
+    pages_data: HashMap<String, Vec<u8>>,
+    #[serde(skip)] // Yrs Docs are not directly serializable in this form for state.
+    pages: HashMap<String, Doc>, // Runtime representation
+    members: HashMap<String, WikiMembership>, // Node ID to membership
+    is_public: bool,
+    owner_id: String, // Node ID of the superadmin
+    // For Yrs, we need to track state vectors for peers
+    peer_state_vectors: HashMap<String, Vec<u8>>, // peer_node_id -> state_vector
+}
+
+impl Wiki {
+    // Helper to get or create a Yrs Doc for a page
+    pub fn get_or_create_page_doc(&mut self, path: &str) -> &mut Doc {
+        self.pages.entry(path.to_string()).or_insert_with(Doc::new)
+    }
+
+    // Method to load pages_data into runtime pages
+    pub fn hydrate_pages(&mut self) {
+        for (path, data) in &self.pages_data {
+            if let Ok(doc) = Doc::from_bytes(data) {
+                self.pages.insert(path.clone(), doc);
+            } else {
+                // Log error: failed to deserialize page data
+                println!("Error: Failed to hydrate page {}", path);
+                // Optionally create a new Doc if hydration fails
+                self.pages.insert(path.clone(), Doc::new());
+            }
+        }
+    }
+
+    // Method to prepare pages for serialization
+    pub fn dehydrate_pages(&mut self) {
+        for (path, doc) in &self.pages {
+            let data = doc.encode_update_v1().unwrap_or_default(); // Or use encode_state_as_update_v1
+            self.pages_data.insert(path.clone(), data);
+        }
+    }
+}
+
+
+#[derive(Default, Debug, Serialize, Deserialize)]
+struct WikiState {
+    node_id: String,
+    wikis: HashMap<String, Wiki>, // wiki_id -> Wiki
+    known_peers: HashSet<String>, // For P2P communication
+}
+```
+
+**Step 1.2: Setup `hyperprocess` Macro in `src/lib.rs`**
+
+  * Define the main state struct (`WikiState`) and implement the `hyperprocess` macro.
+  * Include necessary parameters: `name`, `ui` (even if minimal initially), `endpoints`, `save_config`, `wit_world`.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs
+use hyperprocess_macro::hyperprocess;
+use hyperware_process_lib::{
+    http::server::{HttpBindingConfig, WsBindingConfig},
+    Address, Binding, LazyLoadBlob, Message, Request, Response, SaveOptions, WsMessageType,
+    our_node // If available, or manage node_id manually
+};
+use hyperware_process_lib::logging::{init_logging, Level};
+
+
+#[hyperprocess(
+    name = "decentralized-wiki",
+    icon = "some-icon.png", // Placeholder
+    widget = "wiki-widget",   // Placeholder
+    ui = Some(HttpBindingConfig::default()), // Serve UI files later
+    endpoints = vec![
+        Binding::Http {
+            path: "/api", // Main API endpoint for UI interaction
+            config: HttpBindingConfig::new(false, false, false, None)
+        },
+        // Potentially a WebSocket endpoint for real-time P2P notifications if needed beyond direct messages
+        // Binding::Ws {
+        //     path: "/sync_notifications",
+        //     config: WsBindingConfig::new(false, false, false)
+        // }
+    ],
+    save_config = SaveOptions::EveryNMessage(5), // Or EveryMessage, adjust as needed
+    wit_world = "wiki-dot-os-v0" // Define your WIT world name
+)]
+impl WikiState {
+    #[init]
+    async fn initialize(&mut self) {
+        // Initialize logging
+        init_logging(Level::INFO, Level::DEBUG, None, None, None).unwrap();
+        // Set the node_id (assuming `our_node()` is available or passed via init)
+        // self.node_id = our_node().to_string(); // Or a similar mechanism
+        // For now, let's assume it's set externally or we define a method
+        if self.node_id.is_empty() {
+             // This should ideally come from the runtime environment
+            self.node_id = "default_node_id".to_string();
+            println!("Warning: Node ID not properly initialized, using default.");
+        }
+        println!("Wiki process initialized for node: {}", self.node_id);
+
+        // Hydrate Yrs Docs from persisted state
+        for wiki in self.wikis.values_mut() {
+            wiki.hydrate_pages();
+        }
+    }
+
+    // Placeholder for setting node_id if not automatically available
+    // This might be done via an initial message or configuration
+    // For now, we assume it's populated during `initialize`
+}
+```
+
+**Step 1.3: Define Basic API Request/Response Types (for `serde`)**
+
+  * These will be used for UI communication.
+  * `CreateWikiRequest`, `GetWikiRequest`, `UpdatePageRequest`, `GetPageRequest`, etc.
+  * Use standard WIT-compatible types (`String`, `u64`, `bool`, `Vec<T>`, `HashMap<String, T>`).
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (within or alongside WikiState impl)
+
+// --- API Request & Response Structs (for HTTP handlers) ---
+
+#[derive(Serialize, Deserialize, Debug)]
+struct CreateWikiRequest {
+    name: String,
+    is_public: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct WikiResponse {
+    id: String,
+    name: String,
+    owner_id: String,
+    is_public: bool,
+    members: Vec<WikiMembership>, // Simplified for response
+    pages: Vec<String>, // List of page paths
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct PageContentResponse {
+    path: String,
+    content: String, // Markdown content from Yrs doc
+    // Yrs documents can be large; for initial load, just send text.
+    // For sync, we'll use Yrs-specific mechanisms.
+    last_modified_by: String,
+    last_modified_at: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct UpdatePageRequest {
+    wiki_id: String,
+    path: String,
+    // The content here is the new full markdown text from the user.
+    // The backend will diff this with the Yrs doc.
+    // However, for Yrs, the frontend might directly send Yrs updates/transactions.
+    // For simplicity in this step, let's assume full content update that the backend applies to Yrs.
+    new_content: String,
+    // Alternatively, for direct Yrs update:
+    // yrs_update: Vec<u8>, // Serialized Yrs update
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct AddPeerRequest {
+    peer_node_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct GenericResponse {
+    success: bool,
+    message: String,
+}
+
+// --- P2P Message Structs (for `#[remote]` handlers) ---
+
+#[derive(Serialize, Deserialize, Debug)]
+enum P2PMessage {
+    PingPageUpdate { // Sent when a local page is updated
+        wiki_id: String,
+        page_path: String,
+        // No actual data, just a notification. Receiver will request state vector.
+    },
+    RequestStateVector { // Sent by updater to all peers
+        wiki_id: String,
+        page_path: String,
+        sender_node_id: String,
+    },
+    SendStateVector { // Sent by peers back to the updater
+        wiki_id: String,
+        page_path: String,
+        state_vector: Vec<u8>, // yrs::ReadTxn::state_vector().encode_v1()
+        sender_node_id: String,
+    },
+    SendDiff { // Sent by updater to peers that need updating
+        wiki_id: String,
+        page_path: String,
+        diff: Vec<u8>, // yrs::ReadTxn::encode_diff_v1(&state_vector)
+        sender_node_id: String,
+    },
+    ApplyUpdate { // Sent by editor to other peers (alternative: SendDiff)
+        wiki_id: String,
+        page_path: String,
+        update: Vec<u8>, // yrs::Update::encode_v1()
+        sender_node_id: String,
+    },
+    // For sharing entire wiki state initially or on join
+    ShareWikiData {
+        wiki_id: String,
+        wiki_data: Vec<u8>, // Serialized `Wiki` struct (or relevant parts)
+    },
+}
+```
+
+### Phase 2: Basic Wiki Operations (HTTP Handlers)
+
+**Step 2.1: Implement `create_wiki` HTTP Handler**
+
+  * Takes `CreateWikiRequest`.
+  * Creates a new `Wiki` instance, sets the creator as `SuperAdmin`.
+  * Stores it in `WikiState.wikis`.
+  * Returns `WikiResponse` or an error.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (within WikiState impl)
+use uuid::Uuid; // Add to Cargo.toml
+
+// ... (other use statements)
+
+impl WikiState {
+    // ... (initialize method)
+
+    #[http]
+    async fn create_wiki(&mut self, body: CreateWikiRequest) -> Result<WikiResponse, String> {
+        let wiki_id = Uuid::new_v4().to_string();
+        let owner_id = self.node_id.clone(); // Assuming self.node_id is set
+
+        if owner_id.is_empty() {
+            return Err("Node ID not set. Cannot create wiki.".to_string());
+        }
+
+        let mut members = HashMap::new();
+        members.insert(owner_id.clone(), WikiMembership {
+            user_id: owner_id.clone(),
+            role: WikiRole::SuperAdmin,
+        });
+
+        let new_wiki = Wiki {
+            id: wiki_id.clone(),
+            name: body.name.clone(),
+            pages_data: HashMap::new(),
+            pages: HashMap::new(), // Will be hydrated on next load or first access
+            members,
+            is_public: body.is_public,
+            owner_id: owner_id.clone(),
+            peer_state_vectors: HashMap::new(),
+        };
+
+        self.wikis.insert(wiki_id.clone(), new_wiki);
+        self.save_state_if_needed(); // Manually trigger save after significant changes
+
+        println!("Created wiki: {} by {}", wiki_id, owner_id);
+
+        Ok(WikiResponse {
+            id: wiki_id,
+            name: body.name,
+            owner_id,
+            is_public: body.is_public,
+            members: self.wikis[&self.wikis.keys().last().unwrap().clone()].members.values().cloned().collect(),
+            pages: Vec::new(),
+        })
+    }
+
+    // Helper to manually persist state
+    fn save_state_if_needed(&mut self) {
+        // Before saving, ensure Yrs Docs are serialized into pages_data
+        for wiki in self.wikis.values_mut() {
+            wiki.dehydrate_pages();
+        }
+        // The hyperprocess framework handles actual saving based on save_config.
+        // This call is a placeholder if we needed more direct control,
+        // but usually `maybe_save_state` is called by the framework.
+        // hyperware_process_lib::maybe_save_state(self);
+        // For now, we assume the framework handles it.
+        // This dehydration step is crucial before the framework saves.
+    }
+
+    // Helper to get a mutable wiki by ID
+    fn get_wiki_mut(&mut self, wiki_id: &str) -> Result<&mut Wiki, String> {
+        self.wikis.get_mut(wiki_id).ok_or_else(|| format!("Wiki with ID '{}' not found.", wiki_id))
+    }
+
+    // Helper to get an immutable wiki by ID
+    fn get_wiki(&self, wiki_id: &str) -> Result<&Wiki, String> {
+        self.wikis.get(wiki_id).ok_or_else(|| format!("Wiki with ID '{}' not found.", wiki_id))
+    }
+}
+```
+
+**Step 2.2: Implement `get_wiki_details` HTTP Handler**
+
+  * Takes `wiki_id` as a query parameter or part of the path.
+  * Returns `WikiResponse` for the specified wiki.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (within WikiState impl)
+
+impl WikiState {
+    // ... (create_wiki and other methods)
+
+    #[http]
+    async fn get_wiki_details(&self, wiki_id_req: String) -> Result<WikiResponse, String> {
+        let wiki = self.get_wiki(&wiki_id_req)?;
+
+        Ok(WikiResponse {
+            id: wiki.id.clone(),
+            name: wiki.name.clone(),
+            owner_id: wiki.owner_id.clone(),
+            is_public: wiki.is_public,
+            members: wiki.members.values().cloned().collect(),
+            pages: wiki.pages_data.keys().cloned().collect(), // Send paths of persisted pages
+        })
+    }
+
+    #[http]
+    async fn list_wikis(&self) -> Result<Vec<WikiResponse>, String> {
+        Ok(self.wikis.values().map(|wiki| {
+            WikiResponse {
+                id: wiki.id.clone(),
+                name: wiki.name.clone(),
+                owner_id: wiki.owner_id.clone(),
+                is_public: wiki.is_public,
+                members: wiki.members.values().cloned().collect(),
+                pages: wiki.pages_data.keys().cloned().collect(),
+            }
+        }).collect())
+    }
+}
+```
+
+**Step 2.3: Implement `get_page_content` HTTP Handler**
+
+  * Takes `wiki_id` and `page_path`.
+  * Retrieves the Yrs document for the page.
+  * Gets the current text content from the Yrs document.
+  * Returns `PageContentResponse`.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (within WikiState impl)
+use yrs::{Text, GetString}; // For reading text from Yrs doc
+
+impl WikiState {
+    // ...
+
+    #[http]
+    async fn get_page_content(&mut self, wiki_id_req: String, page_path_req: String) -> Result<PageContentResponse, String> {
+        let wiki = self.get_wiki_mut(&wiki_id_req)?; // Mutable to load doc if not present
+        let doc = wiki.get_or_create_page_doc(&page_path_req);
+        let text_content = doc.get_or_insert_text("content");
+        let current_content = text_content.get_string(&doc.transact());
+
+        // Placeholder for last_modified_by and last_modified_at
+        // These would ideally be stored alongside the Yrs doc or derived from its history if possible
+        let last_modified_by = "unknown_editor".to_string(); // TODO: Track this
+        let last_modified_at = "timestamp_placeholder".to_string(); // TODO: Track this
+
+        Ok(PageContentResponse {
+            path: page_path_req,
+            content: current_content,
+            last_modified_by,
+            last_modified_at,
+        })
+    }
+}
+```
+
+**Step 2.4: Implement `update_page_content` HTTP Handler (Initial Yrs Integration)**
+
+  * Takes `UpdatePageRequest` (containing `wiki_id`, `page_path`, `new_content`).
+  * Retrieves the Yrs document for the page.
+  * Applies the `new_content` to the Yrs document. This will involve clearing the existing content and inserting the new content, or a more sophisticated diff if possible with Yrs for full text.
+      * `let mut txn = doc.transact_mut();`
+      * `text_field.delete(&mut txn, 0, text_field.len(&txn));`
+      * `text_field.insert(&mut txn, 0, &new_content);`
+  * Saves the Yrs document (if Yrs requires explicit save, or rely on `WikiState` persistence). The main persistence is handled by `save_state_if_needed` which serializes the Yrs doc.
+  * Triggers a P2P update notification (see Phase 3).
+  * Returns `GenericResponse`.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (within WikiState impl)
+
+impl WikiState {
+    // ...
+
+    #[http]
+    async fn update_page_content(&mut self, body: UpdatePageRequest) -> Result<GenericResponse, String> {
+        let editor_node_id = self.node_id.clone();
+        if editor_node_id.is_empty() {
+            return Err("Node ID not set. Cannot update page.".to_string());
+        }
+
+        let wiki = self.get_wiki_mut(&body.wiki_id)?;
+        let doc = wiki.get_or_create_page_doc(&body.path);
+        let text_content_field = doc.get_or_insert_text("content");
+
+        // Apply changes to the Yrs Doc
+        let mut txn = doc.transact_mut();
+        let current_len = text_content_field.len(&txn);
+        text_content_field.delete(&mut txn, 0, current_len);
+        text_content_field.insert(&mut txn, 0, &body.new_content);
+        // `txn` is committed when it goes out of scope.
+
+        // TODO: Update last_modified_by and last_modified_at metadata for the page.
+        // This metadata might be stored in a separate map in `Wiki` struct if not directly in Yrs.
+        // e.g., wiki.page_metadata.insert(body.path, PageMetadata { ... });
+
+        self.save_state_if_needed(); // Ensure Yrs doc changes are serialized
+
+        // Notify peers about the update (Phase 3)
+        // For now, just log it. This will be a P2P message.
+        println!("Page {}/{} updated. Triggering P2P sync.", body.wiki_id, body.path);
+        self.initiate_p2p_page_sync(&body.wiki_id, &body.path, &editor_node_id).await;
+
+
+        Ok(GenericResponse {
+            success: true,
+            message: format!("Page '{}/{}' updated successfully.", body.wiki_id, body.path),
+        })
+    }
+}
+```
+
+### Phase 3: P2P Synchronization using Yrs
+
+**Step 3.1: Add Helper: `add_known_peer`**
+
+  * An HTTP endpoint or local mechanism to add peer node IDs to `known_peers`. This is for simplicity; a discovery mechanism would be better in a full app.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (within WikiState impl)
+
+impl WikiState {
+    // ...
+
+    #[http]
+    async fn add_peer(&mut self, body: AddPeerRequest) -> Result<GenericResponse, String> {
+        if body.peer_node_id.is_empty() || body.peer_node_id == self.node_id {
+            return Err("Invalid peer node ID.".to_string());
+        }
+        self.known_peers.insert(body.peer_node_id.clone());
+        self.save_state_if_needed();
+        Ok(GenericResponse {
+            success: true,
+            message: format!("Peer '{}' added.", body.peer_node_id),
+        })
+    }
+
+    // This is the start of the P2P sync process outlined in instructions.txt
+    async fn initiate_p2p_page_sync(&mut self, wiki_id: &str, page_path: &str, sender_node_id: &str) {
+        let p2p_message = P2PMessage::PingPageUpdate {
+            wiki_id: wiki_id.to_string(),
+            page_path: page_path.to_string(),
+        };
+
+        let Ok(serialized_message) = serde_json::to_vec(&p2p_message) else {
+            eprintln!("Failed to serialize PingPageUpdate message");
+            return;
+        };
+
+        for peer_id in self.known_peers.iter() {
+            if peer_id == sender_node_id { continue; } // Don't send to self
+
+            // Construct target address for the peer's wiki process
+            // Assumes peer process has the same name "decentralized-wiki:your_package_name:publisher.os"
+            // The package name and publisher need to be correctly defined.
+            let target_process_id_str = format!("decentralized-wiki:{}:{}",
+                                                std::env::var("MY_PACKAGE_NAME").unwrap_or("wiki_package".to_string()),
+                                                std::env::var("MY_PUBLISHER_NODE").unwrap_or("dev.os".to_string()));
+
+            let Ok(target_process_id) = hyperware_process_lib::ProcessId::from_str(&target_process_id_str) else {
+                eprintln!("Failed to parse target process ID: {}", target_process_id_str);
+                continue;
+            };
+
+            let target_address = Address::new(peer_id.clone(), target_process_id);
+
+            println!("Sending PingPageUpdate to peer: {} for page {}/{}", peer_id, wiki_id, page_path);
+            let request = Request::new()
+                .target(target_address)
+                .body(serialized_message.clone()) // Send the P2PMessage enum variant
+                .send_and_await_response(5); // 5 second timeout, adjust as needed
+
+            // Handle response if necessary, or just fire-and-forget the ping
+            match request {
+                Ok(Ok(Message::Response { .. })) => {
+                    // Successfully sent ping (or got an ack if remote handler sends one)
+                    println!("PingPageUpdate acknowledged by {}", peer_id);
+                }
+                Ok(Ok(Message::Request { .. })) => { /* Unexpected */ }
+                Ok(Err(send_error)) => {
+                    eprintln!("Failed to send PingPageUpdate to {}: {:?}", peer_id, send_error.kind);
+                }
+                Err(build_error) => {
+                     eprintln!("Failed to build request for PingPageUpdate to {}: {:?}", peer_id, build_error);
+                }
+            }
+        }
+    }
+}
+```
+
+**Step 3.2: Implement P2P Message Handlers (`#[remote]`)**
+
+  * **`handle_p2p_message`**: A single remote handler that deserializes `P2PMessage` and routes to internal logic.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (within WikiState impl)
+
+impl WikiState {
+    // ...
+
+    #[remote] // This will handle all incoming P2P messages defined in P2PMessage enum
+    async fn handle_p2p_message(&mut self, source: Address, body_bytes: Vec<u8>) -> Result<(), String> {
+        let p2p_message: P2PMessage = match serde_json::from_slice(&body_bytes) {
+            Ok(msg) => msg,
+            Err(e) => return Err(format!("Failed to deserialize P2PMessage: {}", e)),
+        };
+
+        let sender_node_id = source.node().to_string();
+        println!("Received P2P message from {}: {:?}", sender_node_id, p2p_message);
+
+        match p2p_message {
+            P2PMessage::PingPageUpdate { wiki_id, page_path } => {
+                // This node received a ping that a page was updated.
+                // It should now request the state vector from the sender of the ping.
+                let request_sv_msg = P2PMessage::RequestStateVector {
+                    wiki_id: wiki_id.clone(),
+                    page_path: page_path.clone(),
+                    sender_node_id: self.node_id.clone(), // This node is requesting
+                };
+                let Ok(serialized_msg) = serde_json::to_vec(&request_sv_msg) else {
+                    return Err("Failed to serialize RequestStateVector".to_string());
+                };
+
+                // Send RequestStateVector back to the original updater (sender_node_id from PingPageUpdate)
+                let target_process_id_str = format!("decentralized-wiki:{}:{}",
+                                                std::env::var("MY_PACKAGE_NAME").unwrap_or("wiki_package".to_string()),
+                                                std::env::var("MY_PUBLISHER_NODE").unwrap_or("dev.os".to_string()));
+                let Ok(target_process_id) = hyperware_process_lib::ProcessId::from_str(&target_process_id_str) else {
+                     return Err(format!("Failed to parse target process ID for remote: {}", target_process_id_str));
+                };
+
+                let target_address = Address::new(sender_node_id.clone(), target_process_id);
+                Request::new()
+                    .target(target_address)
+                    .body(serialized_msg)
+                    .send().map_err(|e| format!("Send error: {:?}", e))?; // Fire and forget for now
+                println!("Sent RequestStateVector to {} for {}/{}", sender_node_id, wiki_id, page_path);
+
+            }
+            P2PMessage::RequestStateVector { wiki_id, page_path, sender_node_id: requesting_node_id } => {
+                // This node (which was the original updater) received a request for its state vector.
+                let wiki = self.get_wiki_mut(&wiki_id)?;
+                let doc = wiki.get_or_create_page_doc(&page_path);
+                let state_vector = doc.transact().state_vector().encode_v1();
+
+                let send_sv_msg = P2PMessage::SendStateVector {
+                    wiki_id,
+                    page_path,
+                    state_vector,
+                    sender_node_id: self.node_id.clone(), // This node (original updater) is sending its SV
+                };
+                let Ok(serialized_msg) = serde_json::to_vec(&send_sv_msg) else {
+                    return Err("Failed to serialize SendStateVector".to_string());
+                };
+
+                let target_process_id_str = format!("decentralized-wiki:{}:{}",
+                                                std::env::var("MY_PACKAGE_NAME").unwrap_or("wiki_package".to_string()),
+                                                std::env::var("MY_PUBLISHER_NODE").unwrap_or("dev.os".to_string()));
+                let Ok(target_process_id) = hyperware_process_lib::ProcessId::from_str(&target_process_id_str) else {
+                     return Err(format!("Failed to parse target process ID for remote: {}", target_process_id_str));
+                };
+                let target_address = Address::new(requesting_node_id.clone(), target_process_id);
+
+                Request::new()
+                    .target(target_address)
+                    .body(serialized_msg)
+                    .send().map_err(|e| format!("Send error: {:?}", e))?;
+                println!("Sent SendStateVector to {}", requesting_node_id);
+            }
+            P2PMessage::SendStateVector { wiki_id, page_path, state_vector, sender_node_id: original_updater_node_id } => {
+                // This node (which received a ping and requested SV) now receives the SV from the original updater.
+                // Now, this node computes the diff based on the received SV.
+                let wiki = self.get_wiki_mut(&wiki_id)?;
+                let doc = wiki.get_or_create_page_doc(&page_path);
+                let diff = doc.transact().encode_diff_v1(&yrs::StateVector::decode_v1(&state_vector).map_err(|e| format!("{:?}",e))?);
+
+                let send_diff_msg = P2PMessage::SendDiff {
+                    wiki_id,
+                    page_path,
+                    diff,
+                    sender_node_id: self.node_id.clone(), // This node is sending the diff
+                };
+                let Ok(serialized_msg) = serde_json::to_vec(&send_diff_msg) else {
+                    return Err("Failed to serialize SendDiff".to_string());
+                };
+
+                let target_process_id_str = format!("decentralized-wiki:{}:{}",
+                                                std::env::var("MY_PACKAGE_NAME").unwrap_or("wiki_package".to_string()),
+                                                std::env::var("MY_PUBLISHER_NODE").unwrap_or("dev.os".to_string()));
+                let Ok(target_process_id) = hyperware_process_lib::ProcessId::from_str(&target_process_id_str) else {
+                     return Err(format!("Failed to parse target process ID for remote: {}", target_process_id_str));
+                };
+
+                // Send the diff back to the original updater
+                let target_address = Address::new(original_updater_node_id.clone(), target_process_id);
+                Request::new()
+                    .target(target_address)
+                    .body(serialized_msg)
+                    .send().map_err(|e| format!("Send error: {:?}", e))?;
+                println!("Sent SendDiff to {}", original_updater_node_id);
+            }
+            P2PMessage::SendDiff { wiki_id, page_path, diff, sender_node_id: peer_node_id } => {
+                // This node (original updater) receives a diff from a peer.
+                // It should now apply this diff.
+                // NOTE: The original protocol description implies the editor computes diffs *for each participant*.
+                // This current flow has each participant compute a diff against the editor's state and send it TO the editor.
+                // This needs to be adjusted to match: "Editor computes diff per participant"
+                // For now, let's assume this message means "Here's an update for you (the editor) from a peer" or
+                // rather, "Here's an update from the editor that I (a peer) should apply".
+                //
+                // Corrected logic: This message should be *from* the editor *to* this peer.
+                // This peer applies the diff from the editor.
+                let wiki = self.get_wiki_mut(&wiki_id)?;
+                let doc = wiki.get_or_create_page_doc(&page_path);
+                let update_to_apply = yrs::Update::decode_v1(&diff).map_err(|e| format!("{:?}",e))?;
+                doc.transact_mut().apply_update(update_to_apply);
+                self.save_state_if_needed();
+                println!("Applied diff from {} to {}/{}", sender_node_id, wiki_id, page_path);
+                // TODO: Trigger UI update if this node has a UI.
+            }
+            P2PMessage::ApplyUpdate { wiki_id, page_path, update, sender_node_id } => {
+                // A peer receives a direct update from the editor (or another source of truth).
+                let wiki = self.get_wiki_mut(&wiki_id)?;
+                let doc = wiki.get_or_create_page_doc(&page_path);
+                let update_to_apply = yrs::Update::decode_v1(&update).map_err(|e| format!("{:?}",e))?;
+                doc.transact_mut().apply_update(update_to_apply);
+                self.save_state_if_needed();
+                println!("Applied direct update from {} to {}/{}", sender_node_id, wiki_id, page_path);
+                 // TODO: Trigger UI update.
+            }
+            P2PMessage::ShareWikiData { .. } => {
+                // Handle receiving full wiki data (e.g., when joining a new wiki)
+                // This would involve deserializing `wiki_data` and merging/replacing
+                // the local `Wiki` struct. Complex logic, for later.
+                println!("Received ShareWikiData from {}", sender_node_id);
+            }
+        }
+        Ok(())
+    }
+}
+
+/*
+Corrected Yrs Sync Flow based on instructions.txt:
+1. Editor clicks "save". `update_page_content` is called.
+   - Editor's node applies change to its local Yrs doc.
+   - Editor's node calls `initiate_p2p_page_sync` (which sends `PingPageUpdate` to all known peers).
+
+2. Each Peer receives `PingPageUpdate` via `handle_p2p_message`.
+   - Peer sends `RequestStateVector` *back to the Editor*.
+     (P2PMessage::RequestStateVector { wiki_id, page_path, sender_node_id: self.node_id /* peer's ID */ })
+
+3. Editor's node receives `RequestStateVector` from a peer via `handle_p2p_message`.
+   - Editor's node retrieves its current Yrs doc for the page.
+   - Editor computes the diff: `doc.transact().encode_diff_v1(&yrs::StateVector::decode_v1(&peer_state_vector_from_message)?)`.
+   - Editor sends this `diff` *to that specific peer* using `P2PMessage::ApplyUpdate` (or a renamed `SendDiffToPeer`).
+     (P2PMessage::ApplyUpdate { wiki_id, page_path, update: diff, sender_node_id: self.node_id /* editor's ID */ })
+
+4. Peer receives `P2PMessage::ApplyUpdate` from the Editor via `handle_p2p_message`.
+   - Peer applies the `update` (which is the diff) to its local Yrs doc: `doc.transact_mut().apply_update(yrs::Update::decode_v1(&update_from_message)?)`.
+   - Peer's UI updates.
+
+This flow requires modifying `handle_p2p_message` for `RequestStateVector` and potentially renaming/repurposing `SendDiff`.
+The `initiate_p2p_page_sync` should *only* send the `PingPageUpdate`.
+The subsequent messages are direct request/response between editor and specific peers.
+*/
+
+```
+
+**Step 3.3: Implement Yrs Diffing and Patching** (within the P2P handlers)
+
+  * **On receiving `RequestStateVector` (Editor's node)**:
+      * Load its Yrs doc for the page.
+      * `let diff = local_doc.transact().encode_diff_v1(&peer_state_vector_from_msg);`
+      * Send this `diff` back to the requesting peer using `P2PMessage::ApplyUpdate { update: diff, ... }`.
+  * **On receiving `ApplyUpdate` (Peer's node)**:
+      * Load its Yrs doc for the page.
+      * `local_doc.transact_mut().apply_update(yrs::Update::decode_v1(&update_from_msg)?);`
+      * Trigger UI refresh for this page.
+
+*(The logic for this is partially sketched in Step 3.2 and needs refinement based on the "Corrected Yrs Sync Flow" comment.)*
+
+### Phase 4: User Roles and Permissions
+
+**Step 4.1: Implement Role Management HTTP Handlers**
+
+  * `add_user_to_wiki(wiki_id, user_id, role)`: Admin/SuperAdmin only.
+  * `remove_user_from_wiki(wiki_id, user_id)`: Admin/SuperAdmin only.
+  * `change_user_role(wiki_id, user_id, new_role)`: Admin/SuperAdmin only.
+  * These handlers will modify the `Wiki.members` map.
+
+<!-- end list -->
+
+```rust
+// src/lib.rs (within WikiState impl)
+
+impl WikiState {
+    // ... (P2P handlers)
+
+    // Helper to check permission
+    fn check_permission(&self, wiki_id: &str, user_id: &str, required_roles: &[WikiRole]) -> Result<(), String> {
+        let wiki = self.get_wiki(wiki_id)?;
+        let membership = wiki.members.get(user_id).ok_or_else(|| "User not a member of this wiki.".to_string())?;
+        if required_roles.contains(&membership.role) {
+            Ok(())
+        } else {
+            Err("Permission denied.".to_string())
+        }
+    }
+     fn is_super_admin(&self, wiki_id: &str, user_id: &str) -> bool {
+        self.get_wiki(wiki_id)
+            .ok()
+            .and_then(|wiki| wiki.members.get(user_id))
+            .map_or(false, |mem| mem.role == WikiRole::SuperAdmin)
+    }
+
+
+    #[http]
+    async fn add_user_to_wiki(&mut self, wiki_id_req: String, user_to_add_req: String, role_req: WikiRole) -> Result<GenericResponse, String> {
+        // Assuming the request sender's ID is self.node_id for permission check
+        let requester_id = self.node_id.clone();
+        self.check_permission(&wiki_id_req, &requester_id, &[WikiRole::Admin, WikiRole::SuperAdmin])?;
+
+        let wiki = self.get_wiki_mut(&wiki_id_req)?;
+        if wiki.members.contains_key(&user_to_add_req) {
+            return Err("User already a member.".to_string());
+        }
+        // SuperAdmin cannot be added with a role other than SuperAdmin by an Admin
+        if role_req == WikiRole::SuperAdmin && !self.is_super_admin(&wiki_id_req, &requester_id) {
+            return Err("Only a SuperAdmin can assign SuperAdmin role.".to_string());
+        }
+
+
+        wiki.members.insert(user_to_add_req.clone(), WikiMembership {
+            user_id: user_to_add_req.clone(),
+            role: role_req,
+        });
+        self.save_state_if_needed();
+        Ok(GenericResponse { success: true, message: format!("User {} added to wiki {}.", user_to_add_req, wiki_id_req)})
+    }
+
+    // Similar implementations for remove_user_from_wiki and change_user_role,
+    // always checking permissions and handling SuperAdmin rules (cannot be kicked by Admin, etc.).
+    // Example for change_user_role:
+    #[http]
+    async fn change_user_role(&mut self, wiki_id_req: String, user_to_modify_req: String, new_role_req: WikiRole) -> Result<GenericResponse, String> {
+        let requester_id = self.node_id.clone();
+        self.check_permission(&wiki_id_req, &requester_id, &[WikiRole::Admin, WikiRole::SuperAdmin])?;
+
+        let wiki = self.get_wiki_mut(&wiki_id_req)?;
+        let member_to_modify = wiki.members.get_mut(&user_to_modify_req).ok_or("User not found in wiki.")?;
+
+        // SuperAdmins can only be demoted by other SuperAdmins
+        if member_to_modify.role == WikiRole::SuperAdmin && new_role_req != WikiRole::SuperAdmin && !self.is_super_admin(&wiki_id_req, &requester_id) {
+            return Err("SuperAdmin role can only be changed by another SuperAdmin.".to_string());
+        }
+        // Cannot change role of a SuperAdmin if requester is only an Admin
+        if member_to_modify.role == WikiRole::SuperAdmin && self.check_permission(&wiki_id_req, &requester_id, &[WikiRole::Admin]).is_ok() && !self.is_super_admin(&wiki_id_req, &requester_id) {
+             return Err("Admins cannot change the role of a SuperAdmin.".to_string());
+        }
+         // Prevent assigning SuperAdmin role if requester is not SuperAdmin
+        if new_role_req == WikiRole::SuperAdmin && !self.is_super_admin(&wiki_id_req, &requester_id) {
+            return Err("Only a SuperAdmin can assign SuperAdmin role.".to_string());
+        }
+
+
+        member_to_modify.role = new_role_req;
+        self.save_state_if_needed();
+        Ok(GenericResponse { success: true, message: format!("Role of user {} in wiki {} changed.", user_to_modify_req, wiki_id_req)})
+    }
+}
+```
+
+**Step 4.2: Enforce Permissions in HTTP Handlers**
+
+  * Modify `update_page_content` to check if the user has `Writer`, `Admin`, or `SuperAdmin` role for that wiki.
+  * Other management actions (like changing wiki publicity) should also check roles.
+
+*(Partially done in `add_user_to_wiki` with `check_permission`. Apply this pattern to other relevant handlers, especially `update_page_content`.)*
+
+### Phase 5: Frontend UI (Conceptual - No Code to Write by Agent)
+
+  * **Front Page**:
+      * List available wikis (public or member of).
+      * Create new wiki button.
+      * Manage existing wikis (join, leave, admin actions if permitted).
+  * **Wiki Page View**:
+      * Index/list of pages in the current wiki.
+      * Search functionality for wiki pages.
+      * Display selected page content (Markdown rendered).
+  * **Edit Page View**:
+      * "Edit" button visible only for `Writer+` roles.
+      * Markdown editor (e.g., React-Markdown or similar).
+      * "Save" button: Calls `update_page_content` backend API, which then triggers P2P sync.
+      * "Preview" button: Renders markdown locally in the UI.
+
+### Phase 6: Advanced Features (Future Considerations)
+
+  * **Digital Signatures for Edits**: (As per `resources/id/id/src/lib.rs` and `wiki/src/lib.rs` for signing mechanism)
+      * When a page is updated, the Yrs update or the content hash could be signed by the editor.
+      * This signature would be stored with the page version/history.
+      * Peers can verify signatures to ensure authenticity.
+      * This would involve calling a separate `signing` process (like `sign:sign:sys` or the one in `id/id/src/lib.rs`).
+      * The `WikiPageVersion` struct could be extended: `signature: String`.
+  * **Public Wikis over HTTP**:
+      * If `Wiki.is_public` is true, its pages should be servable via standard HTTP GET requests without authentication, for read-only access.
+      * This requires an HTTP handler that can route `/public/<wiki_id>/<page_path>` to `get_page_content` logic, bypassing auth for public wikis.
+  * **Full CRDT History Navigation in UI**:
+      * Allow users to view past versions of a page and potentially revert. Yrs supports this.
+  * **Wiki Discovery**:
+      * A mechanism for nodes to announce public wikis or find peers for private wikis.
+
+This detailed plan provides a roadmap. Each step will involve writing Rust code in `src/lib.rs`, defining API interactions, and ensuring data consistency with Yrs and Hyperware state management. Remember the constraints regarding WIT types and agent limitations.
+
+```
+```

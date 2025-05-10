@@ -1,0 +1,936 @@
+```
+# instructions.txt
+
+## Goal
+Decentralized wiki
+
+A wiki is synced between participants p2p over the hyperware network.
+It syncs using the yrs crdt library. One possible protocol:
+1. Editor clicks “save” on frontend
+2. Editor’s node sends a ping to other nodes informing them an update has occurred
+3. Each participant sends their statevector https://docs.rs/yrs/latest/yrs/trait.ReadTxn.html#method.state_vector
+4. Editor computes diff per participant (can possibly be cached) https://docs.rs/yrs/latest/yrs/trait.ReadTxn.html#method.encode_diff
+5. Participant applies update https://docs.rs/yrs/latest/yrs/struct.TransactionMut.html#method.apply_update
+
+State consists of a map: path to vector of page history
+
+There are different roles on a wiki: reader, writer, admin, superadmin.
+Admin can add new members, kick members, change permissions. Superadmin cannot be kicked by admins
+
+The ui consists of a front page that allows users to create new wikis or manage existing wikis (eg join public wikis, leave current wikis, or, if an admin, invite/kick members or toggle the wiki from private (default) to public).
+Clicking into a wiki shows the wiki page: an index of that wiki’s pages and a search over the wiki.
+Writer+ roles can edit a page (have an edit button that only appears for them). Pages should be markdown.
+The markdown editor has a Save button that, when clicked, sends an update ping to members.
+The markdown editor also has a preview button
+
+Public wikis are also served by nodes over http
+
+## Important Constraints
+* **No Custom WIT Types:** The Hyperware build system does **not** support custom types like "date-time" in WIT definitions. [cite: 16819]
+You **must** use standard WIT-compatible types (e.g., `string`, `u64`) in your Rust structs that get exposed via WIT.
+For timestamps, we will use `string`. The build framework will generate WIT types based on function signatures automatically.
+* **Agent Limitations:** Remember, you (Claude Code) are an agent that only writes code based on these instructions. [cite: 16822]
+Do **not** run any `kit` commands and do **not** write or run any tests.
+The user will handle building and testing.
+* **File Structure:** Work within... (original instructions.txt content continues if there's more)
+
+---
+## Detailed Implementation Steps
+
+This section expands on the original goal with a more detailed, step-by-step guide for implementing the decentralized wiki project using the Hyperware framework.
+
+### 1. Project Setup and Initial Configuration
+
+1.  **Create a new Hyperware Package:**
+    Use the `kit` CLI to create a new Rust-based Hyperware package. If you haven't already, you can typically do this with a command like `kit new wiki --template rust`.
+    This will generate a basic project structure including `src/lib.rs`, `pkg/manifest.json`, and `metadata.json`.
+
+2.  **Configure `metadata.json`:**
+    Update `metadata.json` with the details for your wiki package.
+    Example:
+    ```json
+    {
+      "name": "wiki",
+      "description": "A decentralized, CRDT-based wiki application",
+      "image": "", // Optional: path to an icon for the package
+      "properties": {
+        "package_name": "wiki",
+        "current_version": "0.1.0",
+        "publisher": "your-hyperware-id.os", // Replace with your publisher ID
+        "mirrors": [],
+        "code_hashes": {},
+        "wit_version": 1,
+        "dependencies": [
+            "id:sys", // If using the system id process for signatures
+            "http-server:distro:sys", // For serving public wikis
+            "vfs:distro:sys" // For potential file system interaction if not using KV store exclusively
+        ]
+      }
+    }
+    ```
+
+3.  **Configure `pkg/manifest.json`:**
+    Define the main process for your wiki application.
+    Example:
+    ```json
+    [
+      {
+        "process_name": "wiki",
+        "process_wasm_path": "/wiki.wasm", // This will be the compiled WASM file
+        "on_exit": "Restart", // Or "None", "Requests" as needed
+        "request_networking": true, // For P2P communication and HTTP serving
+        "request_capabilities": [
+            "id:sign:sys", // For signing/verifying content
+            "http-server:distro:sys", // For serving UI and public wikis
+            "vfs:distro:sys", // If using VFS for storage
+            "kv:distro:sys"     // If using KV store for storage
+        ],
+        "grant_capabilities": [] // Define if this process grants capabilities to others
+      }
+    ]
+    ```
+
+4.  **Add Dependencies to `Cargo.toml`:**
+    Include necessary Rust crates:
+    ```toml
+    [dependencies]
+    hyperware-process-lib = { git = "[https://github.com/hyperware-ai/hyperware-rs](https://github.com/hyperware-ai/hyperware-rs)", branch = "main" }
+    hyperprocess-macro = { git = "[https://github.com/hyperware-ai/hyperware-rs](https://github.com/hyperware-ai/hyperware-rs)", branch = "main" }
+    hyperware-app-common = { git = "[https://github.com/hyperware-ai/hyperware-rs](https://github.com/hyperware-ai/hyperware-rs)", branch = "main" } # If using common utilities like send_rmp
+
+    yrs = "0.17" # CRDT library, check for the latest compatible version
+    serde = { version = "1.0", features = ["derive"] }
+    serde_json = "1.0"
+    rmp-serde = "1.1" # For MessagePack serialization if used by dependent processes like 'net'
+    anyhow = "1.0"
+    thiserror = "1.0"
+    chrono = { version = "0.4", features = ["serde"] } # For timestamps, to be converted to string for WIT
+    uuid = { version = "1.6", features = ["v4", "serde"] } # For unique IDs
+    log = "0.4"
+    slog = "2.7"
+    slog-scope = "4.4"
+    slog-stdlog = "4.1"
+    slog-async = "2.7"
+    slog-term = "2.9"
+
+    # For Markdown processing (choose one or evaluate options)
+    pulldown-cmark = "0.9"
+    # comrak = "0.18" # Alternative Markdown processor
+    ```
+
+### 2. Defining Core Data Structures (`src/lib.rs`)
+
+Define the Rust structs that will represent your wiki's data. Ensure all structs that cross the WIT boundary or are part of the process state are serializable and deserializable with `serde`.
+
+1.  **`WikiPage` Struct:**
+    Represents a single page in a wiki. Content will be managed by `yrs`.
+    ```rust
+    use yrs::{Doc, Text, Transact, Options, Update};
+    use std::collections::HashMap;
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+    pub struct WikiPageMetadata {
+        pub path: String, // e.g., "/main_page" or "/topics/decentralization"
+        pub title: String,
+        pub created_at: String, // Timestamp as string (ISO 8601 format recommended)
+        pub last_modified_at: String,
+        pub creator_id: String, // Hyperware ID of the creator
+        pub last_editor_id: String, // Hyperware ID of the last editor
+        // Potentially add history of editors or signature of the metadata itself
+    }
+
+    // The actual page content (YrsDoc) will be stored separately, keyed by path.
+    // YrsDoc is a wrapper around yrs::Doc to make it serde-friendly if needed,
+    // or store its binary representation. For simplicity, we might store Vec<u8> (Update)
+    // or full state vector. The initial `instructions.txt` suggests `Doc` per wiki,
+    // with paths mapping to page history (vector of updates or full documents).
+    // Let's assume a Yrs Doc per wiki, with Text objects for each page.
+    ```
+
+2.  **`Wiki` Struct:**
+    Represents a single wiki instance.
+    ```rust
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+    pub struct WikiMember {
+        pub id: String, // Hyperware ID
+        pub role: Role,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+    pub enum Role {
+        Reader,
+        Writer,
+        Admin,
+        SuperAdmin,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+    pub struct WikiConfig {
+        pub id: String, // Unique ID for the wiki (e.g., UUID)
+        pub name: String,
+        pub description: String,
+        pub owner: String, // Hyperware ID of the superadmin/creator
+        pub members: HashMap<String, WikiMember>, // Member ID -> WikiMember struct
+        pub public: bool, // True if publicly readable via HTTP
+        pub created_at: String,
+    }
+
+    // For Yrs: A single Yrs Doc can represent the entire wiki, with each page
+    // being a Yrs.Text data structure within that Doc, keyed by page path.
+    // Or, each page could be its own Yrs Doc if inter-page linking is not CRDT-managed.
+    // The original instructions mention "State consists of a map: path to vector of page history".
+    // This implies that the Yrs documents might be per-page.
+    // For simplicity in this guide, let's assume one Yrs Doc per wiki,
+    // and each page is a Yrs.Text within that Doc.
+
+    // We will need a way to serialize/deserialize yrs::Doc or its updates.
+    // yrs::Doc itself is not directly serializable with serde.
+    // Store as Vec<u8> representing the full document state or updates.
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+    pub struct Wiki {
+        pub config: WikiConfig,
+        pub pages_metadata: HashMap<String, WikiPageMetadata>, // path -> metadata
+        // The YRS document for this wiki's content will be managed in WikiState's YrsDoc field.
+        // Alternatively, if storing full state vectors for each page:
+        // pub page_content_docs: HashMap<String, Vec<u8>>, // path -> serialized Yrs Doc state vector
+    }
+    ```
+
+3.  **`WikiState` Struct (Main Process State):**
+    This struct will hold all the data for the wiki process, including all wikis this node is parts of, and their Yrs documents.
+    ```rust
+    use yrs::{Doc, ReadTxn, Transact};
+    use std::collections::HashMap;
+    use hyperware_process_lib::Address; // From the Hyperware framework
+
+    // Wrapper for yrs::Doc to facilitate state management, if necessary
+    // For now, we'll store the Doc directly in memory and handle persistence manually.
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+    pub struct WikiProcessState {
+        pub managed_wikis: HashMap<String, Wiki>, // Wiki ID -> Wiki struct
+        // Store Yrs Docs in memory, keyed by Wiki ID. These are not directly serialized.
+        // Persistence of Yrs Docs will be handled by serializing their state vectors.
+        // pub yrs_docs: HashMap<String, yrs::Doc>, // This cannot be directly part of Serde state.
+
+        // Instead, store serialized states for persistence:
+        pub persisted_yrs_docs: HashMap<String, Vec<u8>>, // Wiki ID -> Serialized Yrs Doc State Vector
+        pub node_id: String, // Current node's Hyperware ID
+    }
+    ```
+    *Note on `yrs_docs`*: `yrs::Doc` is not directly serializable with Serde. You will need to manage its persistence by calling `doc.encode_state_vector()` when saving state and rehydrating it using `Doc::new_with_options()` and `txn.apply_update()` from the stored state vector bytes when loading. The `persisted_yrs_docs` map will store these byte vectors. Actual `yrs::Doc` instances will be kept in a transient, non-serialized field or re-created on demand. For simplicity in the `hyperprocess` macro, we'll keep `yrs_docs` out of the main state struct if it's managed transiently.
+
+### 3. Implementing the Hyperware Process (`src/lib.rs`)
+
+Set up the main process logic using the `#[hyperprocess]` macro.
+
+```rust
+use hyperware_process_lib::{
+    Address, Binding, HttpBindingConfig, LazyLoadBlob, Message, Request as ProcessRequest,
+    Response as ProcessResponse, SaveOptions, WsBindingConfig, WsMessageType, get_path, // Assuming get_path is available
+    timer, // For periodic tasks if needed
+};
+use hyperprocess_macro::hyperprocess;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+// ... other necessary imports ...
+// Bring in your defined structs (Wiki, WikiConfig, WikiPageMetadata, Role, WikiProcessState, etc.)
+
+// Transient store for active YRS documents, not part of the persisted state directly.
+// This would typically be managed within your AppContext or similar.
+// For simplicity in this example, we can rehydrate them on init or when first accessed.
+// static YRS_DOCS: Lazy<RwLock<HashMap<String, yrs::Doc>>> = Lazy::new(|| RwLock::new(HashMap::new()));
+
+
+#[hyperprocess(
+    name = "wiki",
+    package_name = "wiki", // Matches metadata.json
+    publisher = "your-hyperware-id.os", // Matches metadata.json
+    ui = Some(HttpBindingConfig::new(true, true, false, Some("/".to_string()))), // Serve UI at root
+    endpoints = vec![
+        Binding::Http {
+            path: "/api", // Main API endpoint for wiki actions
+            config: HttpBindingConfig::default(),
+        },
+        Binding::Http {
+            path: "/pages/*", // For serving public wiki pages directly via HTTP
+            config: HttpBindingConfig::default(),
+        },
+        Binding::Ws {
+            path: "/sync", // WebSocket endpoint for CRDT sync pings/updates
+            config: WsBindingConfig::default(),
+        }
+    ],
+    save_config = SaveOptions::EveryNMessage(5), // Or EveryMessage, or Never if managing manually with KV/VFS
+    wit_world = "wiki-v0" // Choose a WIT world name
+)]
+impl WikiProcessState {
+
+    #[init]
+    async fn initialize(&mut self) {
+        // Initialize logging
+        init_logging(Level::INFO, Level::DEBUG, None, None, None).unwrap();
+        log::info!("Wiki process initializing...");
+
+        // Store our node ID
+        self.node_id = hyperware_process_lib::our().node().to_string();
+
+        // Rehydrate YRS documents from persisted_yrs_docs
+        // This needs to be done carefully, perhaps in a dedicated manager or AppContext
+        // For each (wiki_id, doc_bytes) in self.persisted_yrs_docs:
+        //   let doc = yrs::Doc::new();
+        //   let mut txn = doc.transact_mut();
+        //   txn.apply_update(Update::decode_v1(&doc_bytes).unwrap()); // Handle error properly
+        //   YRS_DOCS.write().unwrap().insert(wiki_id, doc);
+
+        log::info!("Wiki process initialized with {} wikis loaded from state.", self.managed_wikis.len());
+    }
+
+    // Helper to get a mutable YRS Doc (conceptual)
+    // In a real app, this would involve RwLock/Mutex and potentially loading from persisted state if not in memory.
+    fn get_or_create_yrs_doc(&mut self, wiki_id: &str) -> yrs::Doc {
+        // Attempt to load from persisted state if not already "in memory"
+        // This is a simplified placeholder. A real implementation needs robust management.
+        if let Some(doc_bytes) = self.persisted_yrs_docs.get(wiki_id) {
+            let doc = yrs::Doc::new();
+            let mut txn = doc.transact_mut();
+            if let Ok(update) = yrs::Update::decode_v1(&doc_bytes) {
+                 txn.apply_update(update).expect("Failed to apply update during rehydration");
+            } else {
+                log::error!("Failed to decode Yrs update for wiki {}", wiki_id);
+            }
+            return doc;
+        }
+        // If not found, create a new one (and it should be persisted on next save)
+        let new_doc = yrs::Doc::new();
+        self.persisted_yrs_docs.insert(wiki_id.to_string(), new_doc.encode_state_as_update_v1(&yrs::StateVector::default()));
+        new_doc
+    }
+
+    fn save_yrs_doc(&mut self, wiki_id: &str, doc: &yrs::Doc) {
+        let data = doc.encode_state_as_update_v1(&yrs::StateVector::default());
+        self.persisted_yrs_docs.insert(wiki_id.to_string(), data);
+        // Request state save if not using automatic persistence
+        // hyperware_process_lib::set_state(&serde_json::to_vec(self).unwrap());
+    }
+
+    // ... other helper methods for RBAC, signing, etc. ...
+}
+```
+*Remember the `No Custom WIT Types` constraint: all types in function signatures for `#[http]`, `#[local]`, `#[remote]` handlers must be WIT-compatible (e.g., `String`, `u64`, `Vec<u8>`, simple structs composed of these). Use `String` for timestamps.* [cite: 16819, 16820, 16821]
+
+### 4. Role-Based Access Control (RBAC) and Identity
+
+1.  **User Identity:**
+    Assume users are identified by their Hyperware Node ID (`our().node().to_string()`). Page creation/edits should store this ID.
+
+2.  **Signing and Verification (Conceptual - using `id:sign:sys`):**
+    The `id:sign:sys` process can be used for signing and verifying data.
+    -   **Signing:** When a page is saved, the content hash (or the diff) could be signed.
+    -   **Verification:** Signatures can be verified to ensure authorship.
+    The `make_message` function in `id/id/src/lib.rs` prepends the source address to the message. This needs to be accounted for if used directly.
+
+    Example interaction with a signing process (conceptual, adapt to actual `id:sign:sys` API):
+    ```rust
+    async fn sign_content(content_bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+        // Address of the system's signing process
+        let sign_process_address = Address::new("our", ("sign", "sign", "sys"));
+
+        // Construct the request for the signing process
+        // The actual format depends on the 'sign:sign:sys' API
+        // This is a placeholder for the actual request structure
+        let sign_request_body = serde_json::json!({
+            "Sign": content_bytes // Or however sign:sign:sys expects the message
+        }).to_string();
+
+        let req = ProcessRequest::new()
+            .target(sign_process_address)
+            .body(sign_request_body.into_bytes())
+            .expects_response(5); // 5 second timeout
+
+        match hyperware_app_common::send_request(req).await {
+            Ok(ProcessResponse { body, .. }) => {
+                // Assuming the body contains the signature bytes directly or within a JSON structure
+                // This depends on the actual API of 'sign:sign:sys'
+                // E.g., if it's JSON: let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                // Ok(response["signature"].as_array().unwrap().into_iter().map(|v| v.as_u64().unwrap() as u8).collect())
+                Ok(body) // Simplistic assumption
+            }
+            Err(e) => Err(format!("Signing error: {:?}", e)),
+        }
+    }
+    ```
+
+3.  **Role Management Logic:**
+    Implement functions within `WikiProcessState` to manage roles.
+    ```rust
+    // In impl WikiProcessState
+
+    // Helper to check role
+    fn get_user_role(&self, wiki_id: &str, user_id: &str) -> Option<Role> {
+        self.managed_wikis.get(wiki_id)
+            .and_then(|wiki| wiki.config.members.get(user_id))
+            .map(|member| member.role.clone())
+    }
+
+    // Example: Check if user can write to a wiki
+    fn can_write(&self, wiki_id: &str, user_id: &str) -> bool {
+        if let Some(role) = self.get_user_role(wiki_id, user_id) {
+            matches!(role, Role::Writer | Role::Admin | Role::SuperAdmin)
+        } else {
+            // If wiki is public and allows anonymous writes (not typical for writer role)
+            // or if user is not a member but has some other implicit permission.
+            // For now, only members can write.
+            false
+        }
+    }
+
+    // Example: Check if user is admin
+    fn is_admin(&self, wiki_id: &str, user_id: &str) -> bool {
+        if let Some(role) = self.get_user_role(wiki_id, user_id) {
+            matches!(role, Role::Admin | Role::SuperAdmin)
+        } else {
+            false
+        }
+    }
+
+    // Example: Check if user is superadmin (owner)
+    fn is_super_admin(&self, wiki_id: &str, user_id: &str) -> bool {
+        self.managed_wikis.get(wiki_id)
+            .map_or(false, |wiki| wiki.config.owner == user_id)
+    }
+    ```
+
+### 5. Core Wiki Functionality (HTTP/Local/Remote Handlers)
+
+Implement handlers for creating wikis, pages, editing, etc.
+
+1.  **`CreateWiki` Action (example):**
+    ```rust
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct CreateWikiRequest {
+        pub name: String,
+        pub description: String,
+        pub public: bool,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct CreateWikiResponse {
+        pub wiki_id: String,
+        pub success: bool,
+        pub message: String,
+    }
+
+    // In impl WikiProcessState
+
+    #[http(method = "POST", path = "/api/create_wiki")] // Define specific path if /api is too broad
+    async fn handle_create_wiki(
+        &mut self,
+        source: Address, // Provided by the hyperprocess macro from message source
+        _body: String, // HTTP Body will be parsed by hyperprocess if input type is defined
+                       // Or take specific type: request_data: CreateWikiRequest
+        request_data: CreateWikiRequest,
+    ) -> CreateWikiResponse {
+        let owner_id = source.node().to_string(); // Requesting user is the owner
+        let wiki_id = uuid::Uuid::new_v4().to_string();
+
+        let new_wiki_config = WikiConfig {
+            id: wiki_id.clone(),
+            name: request_data.name,
+            description: request_data.description,
+            owner: owner_id.clone(),
+            members: HashMap::from([(
+                owner_id.clone(),
+                WikiMember { id: owner_id, role: Role::SuperAdmin },
+            )]),
+            public: request_data.public,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let wiki = Wiki {
+            config: new_wiki_config,
+            pages_metadata: HashMap::new(),
+            // Initialize an empty Yrs Doc for this new wiki
+        };
+
+        self.managed_wikis.insert(wiki_id.clone(), wiki);
+
+        // Initialize and persist the YRS doc for this wiki
+        let doc = yrs::Doc::new();
+        self.save_yrs_doc(&wiki_id, &doc);
+
+        log::info!("Created wiki: {}", wiki_id);
+        CreateWikiResponse {
+            wiki_id,
+            success: true,
+            message: "Wiki created successfully".to_string(),
+        }
+    }
+    ```
+
+2.  **`SavePage` Action (combining CRDT logic):**
+    This is complex and involves CRDT sync. The editor sends a ping, then state vectors are exchanged, diffs computed and applied. (source: 16814)
+    Pages are markdown. (source: 16817) The editor has Save and Preview buttons. (source: 16818, 16819)
+
+    ```rust
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct SavePageRequest {
+        pub wiki_id: String,
+        pub page_path: String,
+        pub title: String, // Optional: title might be derived from path or separate
+        pub content_update_v1: Vec<u8>, // yrs::Update encoded as V1
+        // pub signature: Vec<u8>, // Signature of the content_update
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct PageResponse {
+        pub success: bool,
+        pub message: String,
+        pub path: Option<String>,
+    }
+
+    // In impl WikiProcessState
+
+    #[http(method = "POST", path = "/api/save_page")]
+    async fn handle_save_page(
+        &mut self,
+        source: Address,
+        request: SavePageRequest,
+    ) -> PageResponse {
+        let user_id = source.node().to_string();
+        if !self.can_write(&request.wiki_id, &user_id) {
+            return PageResponse { success: false, message: "Permission denied".to_string(), path: None };
+        }
+
+        let mut doc = self.get_or_create_yrs_doc(&request.wiki_id);
+        let mut txn = doc.transact_mut();
+
+        // Apply the update received from the client
+        match yrs::Update::decode_v1(&request.content_update_v1) {
+            Ok(update) => {
+                if let Err(e) = txn.apply_update(update) {
+                     log::error!("Failed to apply Yrs update: {:?}", e);
+                     return PageResponse { success: false, message: format!("Error applying update: {:?}", e), path: None };
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to decode Yrs update: {:?}", e);
+                return PageResponse { success: false, message: format!("Error decoding update: {:?}", e), path: None };
+            }
+        }
+        txn.commit(); // Commit transaction to doc
+
+        // Update metadata
+        let wiki = self.managed_wikis.get_mut(&request.wiki_id).unwrap(); // Should exist
+        let page_meta = wiki.pages_metadata.entry(request.page_path.clone()).or_insert_with(|| {
+            WikiPageMetadata {
+                path: request.page_path.clone(),
+                title: request.title.clone(), // Or derive from path
+                created_at: chrono::Utc::now().to_rfc3339(),
+                creator_id: user_id.clone(),
+                last_modified_at: chrono::Utc::now().to_rfc3339(),
+                last_editor_id: user_id.clone(),
+            }
+        });
+        page_meta.last_modified_at = chrono::Utc::now().to_rfc3339();
+        page_meta.last_editor_id = user_id;
+        if !request.title.is_empty() && request.title != page_meta.title {
+             page_meta.title = request.title;
+        }
+
+        self.save_yrs_doc(&request.wiki_id, &doc); // Persist the updated YRS doc state
+
+        // TODO: Ping other nodes about the update for this wiki_id and page_path.
+        // This would involve sending a message to other known participants of the wiki.
+        // The original instructions.txt outlines this P2P sync protocol.
+        // self.broadcast_update_ping(&request.wiki_id, &request.page_path).await;
+
+        PageResponse {
+            success: true,
+            message: "Page saved.".to_string(),
+            path: Some(request.page_path)
+        }
+    }
+    ```
+
+3.  **`GetPage` Action:**
+    Retrieves page content and metadata.
+    ```rust
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct GetPageRequest {
+        pub wiki_id: String,
+        pub page_path: String,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct GetPageResponse {
+        pub metadata: Option<WikiPageMetadata>,
+        pub content_sv: Option<Vec<u8>>, // Full state vector of the page's Yrs Text or Doc
+        pub success: bool,
+        pub message: String,
+    }
+
+    // In impl WikiProcessState
+
+    #[http(method = "POST", path = "/api/get_page")] // Or GET with query params if preferred
+    async fn handle_get_page(
+        &mut self,
+        _source: Address, // Access control can be added here
+        request_data: GetPageRequest,
+    ) -> GetPageResponse {
+        // TODO: Add read access control
+        // if !self.can_read(&request_data.wiki_id, &source.node().to_string()) { ... }
+
+        match self.managed_wikis.get(&request_data.wiki_id) {
+            Some(wiki) => {
+                let metadata = wiki.pages_metadata.get(&request_data.page_path).cloned();
+
+                let doc = self.get_or_create_yrs_doc(&request_data.wiki_id);
+                // Assuming page_path corresponds to a Yrs.Text object named page_path within the doc
+                let text_ref = doc.get_or_insert_text(&request_data.page_path);
+                let content_sv = doc.encode_state_as_update_v1(&doc.transact().state_vector());
+                // More granularly, you might want to get the state of just one Yrs.Text,
+                // but typically clients sync the whole Doc or specific shared types via updates.
+                // For simplicity, returning the whole doc's state vector, client can filter.
+
+                if metadata.is_some() {
+                    GetPageResponse {
+                        metadata,
+                        content_sv: Some(content_sv),
+                        success: true,
+                        message: "Page retrieved.".to_string(),
+                    }
+                } else {
+                    GetPageResponse {
+                        metadata: None,
+                        content_sv: None,
+                        success: false,
+                        message: "Page not found.".to_string(),
+                    }
+                }
+            }
+            None => GetPageResponse { metadata: None, content_sv: None, success: false, message: "Wiki not found.".to_string() },
+        }
+    }
+    ```
+
+### 6. CRDT Synchronization Logic (P2P)
+
+Implement the 5-step protocol from `instructions.txt`[cite: 16814]. This requires remote/local handlers.
+
+1.  **`PingUpdate` (Step 2):**
+    Sent by an editor's node after a save.
+    ```rust
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct UpdatePing {
+        pub wiki_id: String,
+        pub page_path: String, // Or some identifier for the updated content
+        pub timestamp: String, // To order pings or prevent re-processing
+    }
+
+    // In impl WikiProcessState
+    // This would be called internally after a successful page save.
+    // async fn broadcast_update_ping(&mut self, wiki_id: &str, page_path: &str) {
+    //     let ping = UpdatePing {
+    //         wiki_id: wiki_id.to_string(),
+    //         page_path: page_path.to_string(),
+    //         timestamp: chrono::Utc::now().to_rfc3339(),
+    //     };
+    //     let body = serde_json::to_vec(&ping).unwrap();
+    //
+    //     if let Some(wiki) = self.managed_wikis.get(wiki_id) {
+    //         for member_id in wiki.config.members.keys() {
+    //             if member_id != &self.node_id { // Don't ping self
+    //                 let target_node_id = member_id; // Assuming member_id is the node_id
+    //                 let target_address = Address::new(target_node_id, (self.our.process().name(), self.our.process().package_name(), self.our.process().publisher()));
+    //
+    //                 // Define a RemoteAction enum for your process if not using direct JSON
+    //                 // let remote_action = WikiRemoteAction::ReceivePing(ping.clone());
+    //                 // let body = serde_json::to_vec(&remote_action).unwrap();
+    //
+    //                 let req = ProcessRequest::new()
+    //                     .target(target_address)
+    //                     .body(body.clone()); // No expects_response for pings usually
+    //                 let _ = hyperware_app_common::send_request(req).await; // Fire and forget
+    //             }
+    //         }
+    //     }
+    // }
+
+    // Handler for receiving a ping (this would be a `#[remote]` handler)
+    #[remote] // This function is called by other nodes
+    async fn handle_update_ping(&mut self, source: Address, ping_request_body: Vec<u8>) -> Result<(), String> {
+        let ping: UpdatePing = serde_json::from_slice(&ping_request_body)
+            .map_err(|e| format!("Failed to deserialize UpdatePing: {}", e))?;
+
+        log::info!("Received update ping for wiki {} page {} from {}", ping.wiki_id, ping.page_path, source.node());
+
+        let doc = self.get_or_create_yrs_doc(&ping.wiki_id);
+        let sv = doc.transact().state_vector();
+        let sv_bytes = sv.encode_v1();
+
+        // Send our state vector back (Step 3)
+        // Define a RemoteAction like RequestStateVector or directly send it.
+        // This requires a new remote method on the source node to receive our SV.
+        let response_body = serde_json::json!({
+            "WikiId": ping.wiki_id,
+            "PagePath": ping.page_path, // Include for context
+            "StateVector": sv_bytes
+        }).to_string();
+
+        let req = ProcessRequest::new()
+            .target(source) // Send back to the pinger
+            .body(response_body.into_bytes())
+            .expects_response(5); // Or a dedicated remote handler for SVs
+
+        match hyperware_app_common::send_request(req).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to send state vector: {:?}", e)),
+        }
+    }
+    ```
+
+2.  **Receive State Vector and Send Diff (Step 3 & 4):**
+    A node that initiated the sync (the original editor) receives state vectors.
+    ```rust
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct StateVectorPayload {
+        pub wiki_id: String,
+        pub page_path: String,
+        pub state_vector: Vec<u8>, // yrs::StateVector encoded
+    }
+
+    // In impl WikiProcessState
+    #[remote] // Called by a node that responded to our ping
+    async fn handle_receive_state_vector(&mut self, source: Address, sv_payload_bytes: Vec<u8>) -> Result<(), String> {
+        let sv_payload: StateVectorPayload = serde_json::from_slice(&sv_payload_bytes)
+             .map_err(|e| format!("Failed to deserialize StateVectorPayload: {}", e))?;
+
+        log::info!("Received StateVector for wiki {} page {} from {}", sv_payload.wiki_id, sv_payload.page_path, source.node());
+
+        let doc = self.get_or_create_yrs_doc(&sv_payload.wiki_id);
+        let their_sv = yrs::StateVector::decode_v1(&sv_payload.state_vector)
+            .map_err(|e| format!("Failed to decode StateVector: {:?}", e))?;
+
+        let diff = doc.transact().encode_diff_v1(&their_sv);
+
+        // Send diff (Step 4)
+        let diff_payload_body = serde_json::json!({
+            "WikiId": sv_payload.wiki_id,
+            "PagePath": sv_payload.page_path,
+            "Diff": diff
+        }).to_string();
+
+        let req = ProcessRequest::new()
+            .target(source) // Send diff back to the node that sent its SV
+            .body(diff_payload_body.into_bytes());
+            // No expects_response for diff usually, or can have an Ack.
+
+        match hyperware_app_common::send_request(req).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to send diff: {:?}", e)),
+        }
+    }
+    ```
+
+3.  **Receive and Apply Diff (Step 5):**
+    Node receives a diff and applies it.
+    ```rust
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct DiffPayload {
+        pub wiki_id: String,
+        pub page_path: String,
+        pub diff: Vec<u8>, // yrs::Update encoded as V1 (diff is an update)
+    }
+
+    // In impl WikiProcessState
+    #[remote] // Called by the original editor node (or any node sending a diff)
+    async fn handle_receive_diff(&mut self, source: Address, diff_payload_bytes: Vec<u8>) -> Result<(), String> {
+        let diff_payload: DiffPayload = serde_json::from_slice(&diff_payload_bytes)
+            .map_err(|e| format!("Failed to deserialize DiffPayload: {}", e))?;
+
+        log::info!("Received Diff for wiki {} page {} from {}", diff_payload.wiki_id, diff_payload.page_path, source.node());
+
+        let mut doc = self.get_or_create_yrs_doc(&diff_payload.wiki_id);
+        let mut txn = doc.transact_mut();
+
+        match yrs::Update::decode_v1(&diff_payload.diff) {
+            Ok(update) => {
+                if let Err(e) = txn.apply_update(update) {
+                    return Err(format!("Failed to apply diff update: {:?}", e));
+                }
+            }
+            Err(e) => return Err(format!("Failed to decode diff update: {:?}", e)),
+        }
+        txn.commit();
+        self.save_yrs_doc(&diff_payload.wiki_id, &doc); // Persist changes
+
+        // Optional: Acknowledge applied diff or update UI locally.
+        Ok(())
+    }
+    ```
+    *Note on P2P Sync*: The above is a simplified request/response flow for sync. A more robust implementation would involve managing known peers for each wiki, handling offline nodes, and potentially using WebSocket for more immediate communication of pings and updates directly, rather than just HTTP-based remote calls for each step. The `#[ws]` handler can be used for this.
+
+### 7. UI Implementation (Conceptual)
+
+The UI is described as a front page for managing wikis and a wiki page for viewing/editing. [cite: 16815, 16816] Pages are markdown with a preview. [cite: 16817, 16819]
+The UI will be a separate React application (likely in an `ui/` directory within your package, similar to `id/ui/`).
+
+1.  **Setup UI Project:**
+    Use `kit new ui-template` or adapt the existing `id/ui` structure.
+    Configure `vite.config.ts` for your `wiki` process:
+    ```typescript
+    // In ui/vite.config.ts
+    // ... imports ...
+    // import manifest from '../pkg/manifest.json'; // if wiki is the first process
+    // import metadata from '../metadata.json';
+    // const BASE_URL = `/${manifest[0].process_name}:${metadata.properties.package_name}:${metadata.properties.publisher}`;
+    const BASE_URL = `/wiki:wiki:your-hyperware-id.os`; // Replace with actual values
+
+    export default defineConfig({
+      // ... other configs ...
+      base: BASE_URL,
+      server: {
+        proxy: {
+          // Proxy API requests to your Hyperware node
+          [`${BASE_URL}/api`]: { target: '[http://127.0.0.1:8080](http://127.0.0.1:8080)', changeOrigin: true },
+          [`${BASE_URL}/pages`]: { target: '[http://127.0.0.1:8080](http://127.0.0.1:8080)', changeOrigin: true },
+          [`${BASE_URL}/our.js`]: { /* ... */ },
+          // ... other proxy rules
+        }
+      }
+    });
+    ```
+
+2.  **Main UI Components:**
+    * `WikiListPage`: Allows creating new wikis, listing existing ones, joining public wikis.
+    * `WikiManagePage`: For admins to invite/kick members, change permissions, toggle public/private.
+    * `WikiViewPage`: Displays wiki index, search, and page content.
+    * `MarkdownEditorComponent`: For editing page content with Markdown.
+        * It should take the Yrs Text object (or its string representation) for the current page.
+        * On "Save", it calculates the `yrs::Update` and sends it to the `handle_save_page` backend endpoint.
+        * "Preview" button renders the Markdown to HTML locally.
+        * Use a library like `react-markdown` or `marked` for rendering.
+        * Use a library like `CodeMirror` or `Monaco Editor` with Markdown mode for a good editing experience, and bind it to the Yrs Text type.
+
+3.  **State Management (Zustand example from `id/ui`):**
+    Use a state management library like Zustand to manage UI state, including fetched wiki/page data and Yrs document instances (or their string/JSON representations if not keeping full Doc objects in JS).
+
+4.  **Interacting with Yrs in JavaScript/TypeScript:**
+    You'll need the `yrs` JavaScript bindings.
+    ```bash
+    npm install yrs
+    ```
+    Example of applying an update from the backend (e.g., after fetching initial page content or receiving a sync message):
+    ```typescript
+    import * as Y from 'yrs';
+
+    // Assuming `doc` is a Y.Doc instance for the current wiki
+    // and `updateBytes` is a Uint8Array received from the backend (e.g., GetPageResponse.content_sv or DiffPayload.diff)
+
+    // To apply an update:
+    // Y.applyUpdate(doc, updateBytes);
+
+    // To get content from a Y.Text shared type:
+    // const pageText = doc.getText('page_path_from_metadata');
+    // const currentContent = pageText.toString();
+
+    // When user edits in the Markdown editor, update the Y.Text:
+    // editor.on('change', (newMarkdown) => {
+    //   doc.transact(() => {
+    //     // Efficiently update Y.Text based on changes
+    //     // This might involve diffing old and new markdown to apply granular Yjs operations
+    //     // or simply clearing and re-inserting for simpler cases.
+    //     pageText.delete(0, pageText.length);
+    //     pageText.insert(0, newMarkdown);
+    //   });
+    //   // To send an update to the backend:
+    //   // const updateToSend = Y.encodeStateAsUpdate(doc, previousStateVector); // Or just the text's update
+    //   // Send `updateToSend` to the /api/save_page endpoint
+    // });
+    ```
+
+### 8. Serving Public Wikis (HTTP)
+
+If a wiki is marked as public, its pages should be viewable over HTTP. [cite: 16819]
+
+1.  **HTTP Handler for Public Pages:**
+    ```rust
+    // In impl WikiProcessState
+
+    #[http(method = "GET", path = "/pages/:wiki_id/*page_path")]
+    async fn handle_serve_public_page(
+        &mut self,
+        _source: Address, // Not strictly needed for public read, but good for logging
+        // Parameters are automatically extracted by hyperprocess if named in path or as query
+        // This requires hyperprocess to support path parameter extraction.
+        // If not, parse from get_path() or pass as JSON body/query params.
+        // For this example, assuming get_path() and manual parsing:
+    ) -> ProcessResponse {
+        let path = get_path().unwrap_or_default(); // e.g., "/pages/some-wiki-id/path/to/page"
+        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+        if parts.len() < 3 || parts[0] != "pages" {
+            return ProcessResponse::new()
+                .body("Invalid path".into_bytes())
+                .blob_mime("text/plain") // Set MIME type
+                .status(400); // Bad Request
+        }
+
+        let wiki_id = parts[1];
+        let page_path_segments = &parts[2..];
+        let page_path = format!("/{}", page_path_segments.join("/")); // Reconstruct full path like /path/to/page
+
+        match self.managed_wikis.get(wiki_id) {
+            Some(wiki) if wiki.config.public => {
+                match wiki.pages_metadata.get(&page_path) {
+                    Some(metadata) => {
+                        let doc = self.get_or_create_yrs_doc(wiki_id);
+                        let text_ref = doc.get_or_insert_text(&page_path);
+                        let content_markdown = text_ref.to_string(&doc.transact());
+
+                        // Convert Markdown to HTML (e.g., using pulldown-cmark)
+                        let mut html_output = String::new();
+                        let parser = pulldown_cmark::Parser::new(&content_markdown);
+                        pulldown_cmark::html::push_html(&mut html_output, parser);
+
+                        // Basic HTML template
+                        let full_html = format!(
+                            "<!DOCTYPE html><html><head><title>{}</title></head><body><h1>{}</h1>{}</body></html>",
+                            metadata.title, metadata.title, html_output
+                        );
+
+                        ProcessResponse::new()
+                            .body(full_html.into_bytes())
+                            .blob_mime("text/html") // Set MIME type
+                            .status(200)
+                    }
+                    None => ProcessResponse::new().body("Page not found".into_bytes()).blob_mime("text/plain").status(404),
+                }
+            }
+            Some(_) => ProcessResponse::new().body("Wiki is not public".into_bytes()).blob_mime("text/plain").status(403), // Forbidden
+            None => ProcessResponse::new().body("Wiki not found".into_bytes()).blob_mime("text/plain").status(404),
+        }
+    }
+    ```
+
+### 9. Persistence
+The `WikiProcessState` will be automatically persisted based on `save_config` in the `#[hyperprocess]` macro.
+Ensure that `persisted_yrs_docs` is correctly populated before the state is saved (e.g., by calling `save_yrs_doc` after modifications). Upon initialization (`#[init]`), you'll need to rehydrate the in-memory `yrs::Doc` instances from `persisted_yrs_docs`.
+
+If more granular control over persistence is needed (e.g., saving large Yrs docs to VFS instead of directly in process state, or using a KV store for metadata), you would:
+1.  Set `save_config = SaveOptions::Never` (or less frequently).
+2.  Explicitly use `hyperware_process_lib::kv` or `hyperware_process_lib::vfs` APIs to read/write wiki data and Yrs doc state vectors.
+    -   Wiki metadata and page metadata: good candidates for KV store.
+    -   Yrs doc state vectors (which can be large): could be stored in VFS files, with paths/keys stored in the KV store or process state.
+
+### 10. Further Considerations
+* **Error Handling:** Robustly handle errors from `serde_json`, `yrs`, network requests, etc., returning meaningful error responses to the UI.
+* **Scalability:** For many wikis or very large wikis, consider strategies like lazy loading wiki data, more optimized Yrs state management, and potentially sharding data across multiple processes if the Hyperware framework supports such patterns.
+* **Security:** Beyond basic role checks, consider how capabilities are managed if interacting with other sensitive processes. Ensure that user input is sanitized, especially if rendering HTML from Markdown.
+* **Advanced Yrs Usage:** Explore Yrs features like Subdocuments for more complex page structures, and ensure efficient use of transactions and updates.
+* **Search:** Implementing search across a wiki or all wikis would likely require an index. This could be managed within the process state for small wikis or delegated to a dedicated indexer process for larger scale.
+* **Timestamp Management:** Ensure all timestamps are consistently stored as strings (e.g., RFC 3339 / ISO 8601 UTC) and converted as needed for display or comparison. [cite: 16821]
+
+This detailed guide should provide a solid foundation for building the decentralized wiki. Remember to consult the Hyperware documentation (`app-framework.md`, `llm-generated-app-guide.md`, `signatures-types.md`) for specific API details and best practices.
+```
