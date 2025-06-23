@@ -1,18 +1,20 @@
 {
-  "name": "wiki",
-  "description": "decentralized CRDT-mirrored wiki",
+  "name": "id",
+  "description": "Prove your Hyperware id",
   "image": "",
   "properties": {
-    "package_name": "wiki",
-    "current_version": "1.0.0",
-    "publisher": "nick.hypr",
+    "package_name": "id",
+    "current_version": "0.1.0",
+    "publisher": "sys",
     "mirrors": [],
     "code_hashes": {
-      "1.0.0": ""
+      "0.1.0": ""
     },
     "wit_version": 1,
-    "dependencies": []
+    "dependencies": [
+        "sign:sys"
+    ]
   },
-  "external_url": "https://github.com/nick1udwig/wiki",
+  "external_url": "https://hyperware.ai",
   "animation_url": ""
 }
