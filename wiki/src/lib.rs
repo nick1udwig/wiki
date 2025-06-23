@@ -177,6 +177,7 @@ enum WikiMessage {
     GetWikiPage { wiki_id: String, path: String },
     CreatePage { wiki_id: String, path: String, initial_content: String, user_id: String },
     UpdatePage { wiki_id: String, path: String, content: String, user_id: String },
+    SendInvite { invite: WikiInvite, wiki: Wiki },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -516,6 +517,18 @@ impl WikiState {
                         }
                     }
                     None => WikiResponse::Error("Wiki not found".to_string()),
+                }
+            }
+            WikiMessage::SendInvite { invite, wiki } => {
+                // Check if the invite is for this user
+                if invite.invitee_id != self.node_id {
+                    WikiResponse::Error("This invite is not for this node".to_string())
+                } else {
+                    // Store the invite
+                    self.invites.insert(invite.id.clone(), invite.clone());
+                    // Store the wiki data (but don't add ourselves as members yet)
+                    self.wikis.insert(wiki.id.clone(), wiki);
+                    WikiResponse::Success(true)
                 }
             }
         };
@@ -1414,12 +1427,46 @@ impl WikiState {
             status: InviteStatus::Pending,
         };
 
-        self.invites.insert(invite_id.clone(), invite);
+        self.invites.insert(invite_id.clone(), invite.clone());
 
-        Ok(serde_json::to_string(&InviteUserResponse {
-            invite_id,
-            success: true,
-        }).unwrap())
+        // Send the invite to the invitee via P2P
+        let target_address = Address::new(&req.invitee_id, ("wiki", "wiki", "sys"));
+        let message = WikiMessage::SendInvite {
+            invite: invite.clone(),
+            wiki: wiki.clone(),
+        };
+        
+        let message_body = serde_json::to_string(&message)
+            .map_err(|e| format!("Failed to serialize invite message: {}", e))?
+            .into_bytes();
+        
+        match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+            Ok(Ok(response_bytes)) => {
+                let response_str = String::from_utf8(response_bytes)
+                    .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                match serde_json::from_str::<WikiResponse>(&response_str) {
+                    Ok(WikiResponse::Success(true)) => {
+                        Ok(serde_json::to_string(&InviteUserResponse {
+                            invite_id,
+                            success: true,
+                        }).unwrap())
+                    }
+                    Ok(WikiResponse::Error(err)) => {
+                        // Remove the invite from our local storage if sending failed
+                        self.invites.remove(&invite_id);
+                        Err(format!("Failed to send invite: {}", err))
+                    }
+                    _ => {
+                        self.invites.remove(&invite_id);
+                        Err("Failed to send invite to user".to_string())
+                    }
+                }
+            }
+            _ => {
+                self.invites.remove(&invite_id);
+                Err("Failed to reach invitee node".to_string())
+            }
+        }
     }
 
     #[http]
