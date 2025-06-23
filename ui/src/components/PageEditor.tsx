@@ -73,16 +73,54 @@ export function PageEditor() {
 
 // Simple markdown parser (in production, use a library like marked or remark)
 function parseMarkdown(text: string): string {
-  return text
-    .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-    .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-    .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-    .replace(/\*\*(.*)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br>')
-    .split('</p><p>')
-    .map(p => `<p>${p}</p>`)
-    .join('');
+  if (!text || text.trim() === '') {
+    return '<p>This page is empty. Click Edit to add content.</p>';
+  }
+
+  // First, handle code blocks to prevent them from being parsed
+  const codeBlocks: string[] = [];
+  let parsed = text.replace(/```[\s\S]*?```/g, (match) => {
+    const index = codeBlocks.length;
+    codeBlocks.push(match);
+    return `__CODE_BLOCK_${index}__`;
+  });
+
+  // Parse headers
+  parsed = parsed.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+  parsed = parsed.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+  parsed = parsed.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  
+  // Parse inline formatting
+  parsed = parsed.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  parsed = parsed.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  parsed = parsed.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // Parse links
+  parsed = parsed.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  
+  // Parse lists
+  parsed = parsed.replace(/^\* (.+)$/gim, '<li>$1</li>');
+  parsed = parsed.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+  
+  // Split into paragraphs
+  const paragraphs = parsed.split(/\n\n+/);
+  parsed = paragraphs
+    .map(p => {
+      // Don't wrap headers, lists, or code blocks in paragraphs
+      if (p.match(/^<[hul]|^__CODE_BLOCK_/)) {
+        return p;
+      }
+      // Replace single line breaks with <br> within paragraphs
+      return `<p>${p.replace(/\n/g, '<br>')}</p>`;
+    })
+    .join('\n');
+
+  // Restore code blocks
+  codeBlocks.forEach((block, index) => {
+    const code = block.replace(/^```(\w*)\n?/, '').replace(/\n?```$/, '');
+    const escaped = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    parsed = parsed.replace(`__CODE_BLOCK_${index}__`, `<pre><code>${escaped}</code></pre>`);
+  });
+
+  return parsed;
 }

@@ -1,13 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useWikiStore } from '../store/wikiStore';
 import { PageEditor } from './PageEditor';
+import { PageViewer } from './PageViewer';
 import { PageList } from './PageList';
+import { AdminView } from './AdminView';
+import { wikiApi, WikiRole } from '../api/wiki';
 import './WikiPage.css';
 
 export function WikiPage() {
   const { currentWiki, currentPage, selectWiki, createPage } = useWikiStore();
   const [showCreatePage, setShowCreatePage] = useState(false);
   const [newPagePath, setNewPagePath] = useState('');
+  const [showAdminView, setShowAdminView] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
 
   if (!currentWiki) {
     return null;
@@ -22,6 +27,19 @@ export function WikiPage() {
     setNewPagePath('');
   };
 
+
+  // Check user permissions
+  const nodeId = window.our?.node || '';
+  const currentUserRole = currentWiki.members[nodeId];
+  const isAdmin = currentUserRole === 'Admin' || currentUserRole === 'SuperAdmin';
+  const canWrite = currentUserRole === 'Writer' || currentUserRole === 'Admin' || currentUserRole === 'SuperAdmin';
+  
+  // A wiki is "remote" if it has @ in the ID, indicating it's accessed via another node
+  const isRemoteWiki = currentWiki.id.includes('@');
+  
+  // Writers can now edit remote wikis through P2P
+  const canEdit = canWrite;
+
   return (
     <div className="wiki-page">
       <div className="wiki-header">
@@ -34,19 +52,43 @@ export function WikiPage() {
         <h1>{currentWiki.name}</h1>
         <div className="wiki-info">
           <span className="wiki-badge">{currentWiki.is_public ? 'Public' : 'Private'}</span>
+          {currentUserRole && !isAdmin && (
+            <span className={`role-badge role-${currentUserRole.toLowerCase()}`}>
+              {currentUserRole}
+            </span>
+          )}
+          {canEdit && currentPage && (
+            <button
+              className="mode-toggle-btn"
+              onClick={() => setIsEditMode(!isEditMode)}
+            >
+              {isEditMode ? '👁 View' : '✏️ Edit'}
+            </button>
+          )}
+          {isAdmin && !isRemoteWiki && (
+            <button
+              className="admin-btn"
+              onClick={() => setShowAdminView(true)}
+            >
+              Admin Panel
+            </button>
+          )}
         </div>
       </div>
+
       
       <div className="wiki-content">
         <aside className="wiki-sidebar">
           <div className="sidebar-header">
             <h3>Pages</h3>
-            <button 
-              className="create-page-btn"
-              onClick={() => setShowCreatePage(true)}
-            >
-              + New Page
-            </button>
+            {canEdit && (
+              <button 
+                className="create-page-btn"
+                onClick={() => setShowCreatePage(true)}
+              >
+                + New Page
+              </button>
+            )}
           </div>
           
           {showCreatePage && (
@@ -70,7 +112,11 @@ export function WikiPage() {
         
         <main className="wiki-main">
           {currentPage ? (
-            <PageEditor />
+            isEditMode && canEdit ? (
+              <PageEditor />
+            ) : (
+              <PageViewer />
+            )
           ) : (
             <div className="empty-page">
               <p>Select a page from the sidebar or create a new one.</p>
@@ -78,6 +124,13 @@ export function WikiPage() {
           )}
         </main>
       </div>
+      
+      {showAdminView && (
+        <AdminView
+          wiki={currentWiki}
+          onClose={() => setShowAdminView(false)}
+        />
+      )}
     </div>
   );
 }

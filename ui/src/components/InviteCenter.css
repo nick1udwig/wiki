@@ -1,0 +1,94 @@
+.invite-center {
+  background: var(--bg-secondary);
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  margin-bottom: 2rem;
+}
+
+.invite-center h3 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  color: var(--text-primary);
+}
+
+.invite-center.loading {
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.empty-invites {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-secondary);
+}
+
+.invite-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.invite-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  transition: opacity 0.2s;
+}
+
+.invite-card.expired {
+  opacity: 0.6;
+}
+
+.invite-info h4 {
+  margin: 0 0 0.5rem 0;
+  color: var(--text-primary);
+}
+
+.invite-meta {
+  margin: 0 0 0.25rem 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.invite-date {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+}
+
+.invite-expired {
+  margin: 0.5rem 0 0 0;
+  color: #e74c3c;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.invite-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.accept-btn {
+  background-color: #27ae60;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.accept-btn:hover {
+  background-color: #229954;
+}
+
+.decline-btn {
+  background-color: #e74c3c;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.decline-btn:hover {
+  background-color: #c0392b;
+}

@@ -1,6 +1,14 @@
 import { create } from 'zustand';
 import { Wiki, WikiPage, WikiRole, wikiApi, PageInfo } from '../api/wiki';
 
+// Helper to extract error message with details
+const getErrorMessage = (error: any, fallback: string): string => {
+  if (error.details) {
+    return typeof error.details === 'string' ? error.details : JSON.stringify(error.details);
+  }
+  return error.message || fallback;
+};
+
 interface WikiStore {
   // State
   wikis: Wiki[];
@@ -18,6 +26,9 @@ interface WikiStore {
   createWiki: (name: string, description: string, is_public: boolean) => Promise<void>;
   createPage: (path: string, initialContent: string) => Promise<void>;
   loadPages: (wiki_id: string) => Promise<void>;
+  joinWiki: (wiki_id: string, node_id?: string) => Promise<void>;
+  inviteUser: (wiki_id: string, invitee_id: string) => Promise<void>;
+  manageMember: (wiki_id: string, member_id: string, action: 'add' | 'remove' | 'update', role?: WikiRole) => Promise<void>;
   setError: (error: string | null) => void;
   clearError: () => void;
 }
@@ -36,7 +47,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       const wikis = await wikiApi.listWikis();
       set({ wikis, isLoading: false });
     } catch (error: any) {
-      set({ error: error.message || 'Failed to load wikis', isLoading: false });
+      set({ error: getErrorMessage(error, 'Failed to load wikis'), isLoading: false });
     }
   },
 
@@ -53,7 +64,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       const pages = await wikiApi.listPages(wiki_id);
       set({ pages, isLoading: false });
     } catch (error: any) {
-      set({ error: error.message || 'Failed to load pages', isLoading: false });
+      set({ error: getErrorMessage(error, 'Failed to load pages'), isLoading: false });
     }
   },
 
@@ -63,7 +74,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       const page = await wikiApi.getPage(wiki_id, path);
       set({ currentPage: page, isLoading: false });
     } catch (error: any) {
-      set({ error: error.message || 'Failed to load page', isLoading: false });
+      set({ error: getErrorMessage(error, 'Failed to load page'), isLoading: false });
     }
   },
 
@@ -79,7 +90,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
         currentPage: { ...currentPage, content }
       });
     } catch (error: any) {
-      set({ error: error.message || 'Failed to save page', isLoading: false });
+      set({ error: getErrorMessage(error, 'Failed to save page'), isLoading: false });
     }
   },
 
@@ -94,7 +105,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
         isLoading: false 
       });
     } catch (error: any) {
-      set({ error: error.message || 'Failed to create wiki', isLoading: false });
+      set({ error: getErrorMessage(error, 'Failed to create wiki'), isLoading: false });
     }
   },
 
@@ -110,7 +121,41 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
       // Load the newly created page
       await get().loadPage(currentWiki.id, path);
     } catch (error: any) {
-      set({ error: error.message || 'Failed to create page', isLoading: false });
+      set({ error: getErrorMessage(error, 'Failed to create page'), isLoading: false });
+    }
+  },
+
+  joinWiki: async (wiki_id: string, node_id?: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      await wikiApi.joinWiki(wiki_id, node_id);
+      // Reload wikis list to include the newly joined wiki
+      await get().loadWikis();
+      set({ isLoading: false });
+    } catch (error: any) {
+      set({ error: getErrorMessage(error, 'Failed to join wiki'), isLoading: false });
+    }
+  },
+
+  inviteUser: async (wiki_id: string, invitee_id: string) => {
+    try {
+      await wikiApi.inviteUser(wiki_id, invitee_id);
+    } catch (error: any) {
+      throw new Error(getErrorMessage(error, 'Failed to invite user'));
+    }
+  },
+
+  manageMember: async (wiki_id: string, member_id: string, action: 'add' | 'remove' | 'update', role?: WikiRole) => {
+    try {
+      await wikiApi.manageMember(wiki_id, member_id, action, role);
+      // Reload the current wiki to get updated member list
+      const { currentWiki } = get();
+      if (currentWiki && currentWiki.id === wiki_id) {
+        const updatedWiki = await wikiApi.getWiki(wiki_id);
+        set({ currentWiki: updatedWiki });
+      }
+    } catch (error: any) {
+      throw new Error(getErrorMessage(error, 'Failed to manage member'));
     }
   },
 

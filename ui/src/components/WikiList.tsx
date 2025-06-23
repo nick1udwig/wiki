@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useWikiStore } from '../store/wikiStore';
+import { wikiApi, WikiInfo } from '../api/wiki';
 import './WikiList.css';
 
 export function WikiList() {
-  const { wikis, loadWikis, createWiki, selectWiki, isLoading, error } = useWikiStore();
+  const { wikis, loadWikis, createWiki, selectWiki, joinWiki, isLoading, error } = useWikiStore();
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showJoinForm, setShowJoinForm] = useState(false);
   const [newWiki, setNewWiki] = useState({ name: '', description: '', is_public: false });
+  const [joinUsername, setJoinUsername] = useState('');
+  const [foundWikis, setFoundWikis] = useState<WikiInfo[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   useEffect(() => {
     loadWikis();
@@ -20,6 +25,28 @@ export function WikiList() {
     setNewWiki({ name: '', description: '', is_public: false });
   };
 
+  const handleSearchUser = async () => {
+    if (!joinUsername.trim()) return;
+    
+    setSearchLoading(true);
+    try {
+      const wikis = await wikiApi.findWikisByUser(joinUsername);
+      setFoundWikis(wikis);
+    } catch (err) {
+      console.error('Failed to find wikis:', err);
+      setFoundWikis([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const handleJoinWiki = async (wikiId: string, nodeId?: string) => {
+    await joinWiki(wikiId, nodeId);
+    setShowJoinForm(false);
+    setJoinUsername('');
+    setFoundWikis([]);
+  };
+
   if (isLoading) {
     return <div className="loading">Loading wikis...</div>;
   }
@@ -28,12 +55,20 @@ export function WikiList() {
     <div className="wiki-list">
       <div className="wiki-list-header">
         <h2>My Wikis</h2>
-        <button 
-          className="create-wiki-btn"
-          onClick={() => setShowCreateForm(true)}
-        >
-          Create New Wiki
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button 
+            className="create-wiki-btn"
+            onClick={() => setShowCreateForm(true)}
+          >
+            Create New Wiki
+          </button>
+          <button 
+            onClick={() => setShowJoinForm(true)}
+            style={{ backgroundColor: '#9b59b6' }}
+          >
+            Join Wiki
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -83,6 +118,56 @@ export function WikiList() {
               <button type="button" onClick={() => setShowCreateForm(false)}>Cancel</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {showJoinForm && (
+        <div className="create-wiki-form">
+          <h3>Join a Wiki</h3>
+          <div className="form-group">
+            <label htmlFor="username">Search by Username</label>
+            <input
+              id="username"
+              type="text"
+              value={joinUsername}
+              onChange={(e) => setJoinUsername(e.target.value)}
+              placeholder="Enter username to find their public wikis"
+            />
+          </div>
+          <div className="form-actions">
+            <button onClick={handleSearchUser} disabled={searchLoading}>
+              {searchLoading ? 'Searching...' : 'Search'}
+            </button>
+            <button type="button" onClick={() => {
+              setShowJoinForm(false);
+              setJoinUsername('');
+              setFoundWikis([]);
+            }}>Cancel</button>
+          </div>
+          
+          {foundWikis.length > 0 && (
+            <div className="found-wikis">
+              <h4>Found Wikis:</h4>
+              {foundWikis.map((wiki) => (
+                <div key={wiki.id} className="found-wiki-item">
+                  <div>
+                    <strong>{wiki.name}</strong>
+                    <p>{wiki.description}</p>
+                    <small>{wiki.member_count} members</small>
+                  </div>
+                  <button onClick={() => handleJoinWiki(wiki.id, wiki.node_id)}>
+                    Join
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {searchLoading === false && joinUsername && foundWikis.length === 0 && (
+            <p style={{ marginTop: '1rem', color: 'var(--text-secondary)' }}>
+              No public wikis found for user "{joinUsername}"
+            </p>
+          )}
         </div>
       )}
       
