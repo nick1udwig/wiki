@@ -1,0 +1,100 @@
+.wiki-list {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.wiki-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+}
+
+.wiki-list-header h2 {
+  margin: 0;
+  color: #2c3e50;
+}
+
+.create-wiki-btn {
+  background-color: #27ae60;
+}
+
+.create-wiki-btn:hover {
+  background-color: #229954;
+}
+
+.create-wiki-form {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  margin-bottom: 2rem;
+}
+
+.create-wiki-form h3 {
+  margin-top: 0;
+  color: #2c3e50;
+}
+
+.wiki-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.wiki-card {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.wiki-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.wiki-card h3 {
+  margin: 0 0 0.5rem 0;
+  color: #2c3e50;
+}
+
+.wiki-card p {
+  color: #666;
+  margin: 0 0 1rem 0;
+  min-height: 2.5rem;
+}
+
+.wiki-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.wiki-badge {
+  background-color: #e8f4f8;
+  color: #2980b9;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.wiki-members {
+  color: #7f8c8d;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 4rem;
+  color: #7f8c8d;
+}
+
+.form-group.checkbox label {
+  display: flex;
+  align-items: center;
+  font-weight: normal;
+}

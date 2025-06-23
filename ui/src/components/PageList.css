@@ -1,0 +1,53 @@
+.page-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.page-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.page-list li {
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.page-list li:hover {
+  background-color: #f8f8f8;
+}
+
+.page-list li.active {
+  background-color: #e8f4f8;
+  border-left: 3px solid #3498db;
+}
+
+.page-item {
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.page-list li.active .page-item {
+  padding-left: calc(1rem - 3px);
+}
+
+.page-name {
+  font-weight: 500;
+  color: #2c3e50;
+}
+
+.page-meta {
+  font-size: 0.75rem;
+  color: #7f8c8d;
+}
+
+.empty-pages {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: #7f8c8d;
+  font-size: 0.9rem;
+}

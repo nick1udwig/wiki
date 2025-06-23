@@ -3,3 +3,4 @@ api
 **/target
 pkg/*.wasm
 pkg/*.zip
+pkg/ui
