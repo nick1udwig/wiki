@@ -9,12 +9,11 @@ import { wikiApi, WikiRole } from '../api/wiki';
 import './WikiPage.css';
 
 export function WikiPage() {
-  const { currentWiki, currentPage, selectWiki, createPage, loadPages, loadWiki, loadPage } = useWikiStore();
+  const { currentWiki, currentPage, selectWiki, createPage, loadPages, loadWiki, loadPage, sidebarCollapsed, setSidebarCollapsed } = useWikiStore();
   const [showCreatePage, setShowCreatePage] = useState(false);
   const [newPagePath, setNewPagePath] = useState('');
   const [showAdminView, setShowAdminView] = useState(false);
   const [isEditMode, setIsEditMode] = useState<boolean | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
 
   if (!currentWiki) {

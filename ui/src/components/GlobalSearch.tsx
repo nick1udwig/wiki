@@ -5,7 +5,7 @@ import { useWikiStore } from '../store/wikiStore';
 import './GlobalSearch.css';
 
 export function GlobalSearch() {
-  const { selectWiki, loadPage } = useWikiStore();
+  const { selectWiki, loadPage, loadWikis, wikis, setSidebarCollapsed } = useWikiStore();
 
   const handleGlobalSearch = async (query: string): Promise<any[]> => {
     const results = await wikiApi.searchAllWikis(query);
@@ -20,10 +20,29 @@ export function GlobalSearch() {
     }));
   };
 
-  const handleSelectResult = (path: string, result: any) => {
-    // Load the wiki and then the page
-    selectWiki({ id: result.wiki_id, name: result.wiki_name } as any);
-    loadPage(result.wiki_id, path);
+  const handleSelectResult = async (path: string, result: any) => {
+    try {
+      // First, check if we already have this wiki in our list
+      let wiki = wikis.find(w => w.id === result.wiki_id);
+      
+      if (!wiki) {
+        // If not, try to load it
+        const loadedWiki = await wikiApi.getWiki(result.wiki_id);
+        await selectWiki(loadedWiki);
+      } else {
+        await selectWiki(wiki);
+      }
+      
+      // Then load the specific page
+      await loadPage(result.wiki_id, path);
+      
+      // Collapse sidebar on mobile or always for better UX
+      setSidebarCollapsed(true);
+    } catch (error) {
+      console.error('Failed to navigate to search result:', error);
+      // If loading the wiki fails, at least try to reload the wiki list
+      await loadWikis();
+    }
   };
 
   return (

@@ -17,6 +17,7 @@ interface WikiStore {
   pages: PageInfo[];
   isLoading: boolean;
   error: string | null;
+  sidebarCollapsed: boolean;
   
   // Actions
   loadWikis: () => Promise<void>;
@@ -28,6 +29,7 @@ interface WikiStore {
   createPage: (path: string, initialContent: string) => Promise<void>;
   loadPages: (wiki_id: string) => Promise<void>;
   joinWiki: (wiki_id: string, node_id?: string) => Promise<void>;
+  setSidebarCollapsed: (collapsed: boolean) => void;
   inviteUser: (wiki_id: string, invitee_id: string) => Promise<void>;
   manageMember: (wiki_id: string, member_id: string, action: 'add' | 'remove' | 'update', role?: WikiRole) => Promise<void>;
   setError: (error: string | null) => void;
@@ -41,6 +43,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
   pages: [],
   isLoading: false,
   error: null,
+  sidebarCollapsed: false,
 
   loadWikis: async () => {
     set({ isLoading: true, error: null });
@@ -180,6 +183,10 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
     } catch (error: any) {
       throw new Error(getErrorMessage(error, 'Failed to manage member'));
     }
+  },
+
+  setSidebarCollapsed: (collapsed) => {
+    set({ sidebarCollapsed: collapsed });
   },
 
   setError: (error) => {
