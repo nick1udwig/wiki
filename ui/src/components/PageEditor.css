@@ -8,6 +8,33 @@
   box-shadow: 0 2px 4px rgba(0,0,0,0.1);
   overflow: hidden;
   border: 1px solid var(--border-color);
+  position: relative;
+}
+
+.edit-overlay-btn {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background-color: #2196F3;
+  color: white;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s;
+  z-index: 10;
+}
+
+.edit-overlay-btn:hover {
+  background-color: #1976D2;
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 .editor-header {
@@ -27,6 +54,9 @@
 .editor-toolbar {
   display: flex;
   gap: 0.5rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
 }
 
 .editor-content {

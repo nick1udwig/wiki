@@ -10,8 +10,6 @@ import './WikiPage.css';
 
 export function WikiPage() {
   const { currentWiki, currentPage, selectWiki, createPage, loadPages, loadWiki, loadPage, sidebarCollapsed, setSidebarCollapsed } = useWikiStore();
-  const [showCreatePage, setShowCreatePage] = useState(false);
-  const [newPagePath, setNewPagePath] = useState('');
   const [showAdminView, setShowAdminView] = useState(false);
   const [isEditMode, setIsEditMode] = useState<boolean | null>(null);
 
@@ -20,13 +18,9 @@ export function WikiPage() {
     return null;
   }
 
-  const handleCreatePage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPagePath.trim()) return;
-    
-    await createPage(newPagePath, `# ${newPagePath}\n\nStart writing your content here...`);
-    setShowCreatePage(false);
-    setNewPagePath('');
+  const handleCreatePage = async () => {
+    // Create a new untitled page
+    await createPage('temp', `# New Note\n\nStart writing your content here...`);
     
     // Collapse sidebar on mobile after creating page
     if (isMobile) {
@@ -117,7 +111,7 @@ export function WikiPage() {
             {canEdit && (
               <button 
                 className="create-page-btn"
-                onClick={() => setShowCreatePage(true)}
+                onClick={handleCreatePage}
               >
                 + New Page
               </button>
@@ -138,21 +132,6 @@ export function WikiPage() {
             />
           </div>
           
-          {showCreatePage && (
-            <form onSubmit={handleCreatePage} className="create-page-form">
-              <input
-                type="text"
-                placeholder="Page name"
-                value={newPagePath}
-                onChange={(e) => setNewPagePath(e.target.value)}
-                autoFocus
-              />
-              <div className="form-actions">
-                <button type="submit">Create</button>
-                <button type="button" onClick={() => setShowCreatePage(false)}>Cancel</button>
-              </div>
-            </form>
-          )}
           
           <PageList onPageSelect={(path) => {
             loadPage(currentWiki.id, path);

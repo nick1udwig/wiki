@@ -1160,7 +1160,10 @@ impl WikiState {
 
         // Local wiki handling
         self.check_permission(&req.wiki_id, WikiRole::Writer)?;
-        let page_key = format!("{}:{}", req.wiki_id, req.path);
+        
+        // Extract title from the initial content
+        let title = Self::extract_title_from_markdown(&req.initial_content);
+        let page_key = format!("{}:{}", req.wiki_id, title);
 
         let doc = Doc::new();
         let text = doc.get_or_insert_text("content");
@@ -1176,7 +1179,7 @@ impl WikiState {
         let update = encoder.to_vec();
 
         let page = WikiPage {
-            path: req.path.clone(),
+            path: title.clone(),
             wiki_id: req.wiki_id.clone(),
             current_version: PageVersion {
                 content: update.clone(),
@@ -1191,7 +1194,7 @@ impl WikiState {
 
         Ok(serde_json::to_string(&CreatePageResponse {
             success: true,
-            path: req.path,
+            path: title,
         }).unwrap())
     }
 
@@ -1245,23 +1248,50 @@ impl WikiState {
 
         // Local wiki handling
         self.check_permission(&req.wiki_id, WikiRole::Writer)?;
-        let page_key = format!("{}:{}", req.wiki_id, req.path);
+        let old_page_key = format!("{}:{}", req.wiki_id, req.path);
 
-        let doc = self.active_docs.entry(page_key.clone())
-            .or_insert_with(|| {
-                if let Some(page) = self.pages.get(&page_key) {
-                    let new_doc = Doc::new();
-                    {
-                        let mut txn = new_doc.transact_mut();
-                        if let Ok(update) = yrs::Update::decode_v1(&page.yrs_doc) {
-                            let _ = txn.apply_update(update);
-                        }
+        // Extract the new title from the content
+        let new_title = Self::extract_title_from_markdown(&req.content);
+        let new_page_key = format!("{}:{}", req.wiki_id, new_title);
+
+        // Check if title has changed
+        let title_changed = req.path != new_title;
+
+        let doc = if title_changed {
+            // Remove the old page and doc
+            if let Some(old_doc) = self.active_docs.remove(&old_page_key) {
+                self.pages.remove(&old_page_key);
+                old_doc
+            } else if let Some(page) = self.pages.remove(&old_page_key) {
+                let new_doc = Doc::new();
+                {
+                    let mut txn = new_doc.transact_mut();
+                    if let Ok(update) = yrs::Update::decode_v1(&page.yrs_doc) {
+                        let _ = txn.apply_update(update);
                     }
-                    new_doc
-                } else {
-                    Doc::new()
                 }
-            });
+                new_doc
+            } else {
+                Doc::new()
+            }
+        } else {
+            self.active_docs.entry(old_page_key.clone())
+                .or_insert_with(|| {
+                    if let Some(page) = self.pages.get(&old_page_key) {
+                        let new_doc = Doc::new();
+                        {
+                            let mut txn = new_doc.transact_mut();
+                            if let Ok(update) = yrs::Update::decode_v1(&page.yrs_doc) {
+                                let _ = txn.apply_update(update);
+                            }
+                        }
+                        new_doc
+                    } else {
+                        Doc::new()
+                    }
+                })
+                .clone()
+        };
 
         let text = doc.get_or_insert_text("content");
         {
@@ -1280,7 +1310,7 @@ impl WikiState {
         let update = encoder.to_vec();
 
         let page = WikiPage {
-            path: req.path.clone(),
+            path: new_title.clone(),
             wiki_id: req.wiki_id.clone(),
             current_version: PageVersion {
                 content: update.clone(),
@@ -1290,7 +1320,9 @@ impl WikiState {
             yrs_doc: update,
         };
 
-        self.pages.insert(page_key, page);
+        // Insert with new key
+        self.pages.insert(new_page_key.clone(), page);
+        self.active_docs.insert(new_page_key, doc);
 
         Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap())
     }
@@ -2371,6 +2403,21 @@ impl WikiState {
 }
 
 impl WikiState {
+    fn extract_title_from_markdown(content: &str) -> String {
+        // Get the first non-empty line from the content
+        if let Some(first_line) = content.lines().find(|line| !line.trim().is_empty()) {
+            let trimmed = first_line.trim();
+            // Remove markdown heading syntax if present
+            if let Some(title) = trimmed.strip_prefix('#') {
+                title.trim().to_string()
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            "Untitled".to_string()
+        }
+    }
+
     async fn get_remote_wiki_data(&self, wiki_id: &str, node_id: &str) -> Result<Wiki, String> {
         let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
         let message = WikiMessage::GetWikiData {

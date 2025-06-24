@@ -28,25 +28,27 @@ export function PageEditor() {
 
   return (
     <div className="page-editor">
-      <div className="editor-header">
-        <h2>{currentPage.path}</h2>
+      {!isEditing && (
+        <button 
+          className="edit-overlay-btn"
+          onClick={() => setIsEditing(true)}
+          title="Edit page"
+        >
+          ✏️
+        </button>
+      )}
+      
+      {isEditing && (
         <div className="editor-toolbar">
-          {!isEditing && (
-            <button onClick={() => setIsEditing(true)}>Edit</button>
-          )}
-          {isEditing && (
-            <>
-              <button onClick={handleSave} disabled={isLoading}>
-                {isLoading ? 'Saving...' : 'Save'}
-              </button>
-              <button onClick={() => setShowPreview(!showPreview)}>
-                {showPreview ? 'Edit' : 'Preview'}
-              </button>
-              <button onClick={handleCancel}>Cancel</button>
-            </>
-          )}
+          <button onClick={handleSave} disabled={isLoading}>
+            {isLoading ? 'Saving...' : 'Save'}
+          </button>
+          <button onClick={() => setShowPreview(!showPreview)}>
+            {showPreview ? 'Edit' : 'Preview'}
+          </button>
+          <button onClick={handleCancel}>Cancel</button>
         </div>
-      </div>
+      )}
       
       <div className="editor-content">
         {isEditing && !showPreview ? (

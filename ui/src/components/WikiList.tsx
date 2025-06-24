@@ -5,7 +5,7 @@ import { wikiApi, WikiInfo } from '../api/wiki';
 import './WikiList.css';
 
 export function WikiList() {
-  const { wikis, loadWikis, createWiki, selectWiki, joinWiki, loadPage, isLoading, error } = useWikiStore();
+  const { wikis, loadWikis, createWiki, selectWiki, joinWiki, loadPage, isLoading, error, setSidebarCollapsed } = useWikiStore();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showJoinForm, setShowJoinForm] = useState(false);
   const [newWiki, setNewWiki] = useState({ name: '', description: '', is_public: false });
@@ -185,7 +185,10 @@ export function WikiList() {
             <div 
               key={wiki.id} 
               className="wiki-item" 
-              onClick={() => selectWiki(wiki)}
+              onClick={() => {
+                setSidebarCollapsed(false); // Open sidebar when selecting wiki from home
+                selectWiki(wiki);
+              }}
             >
               <div className="wiki-item-primary">
                 <h3 className="wiki-name">{wiki.name}</h3>
