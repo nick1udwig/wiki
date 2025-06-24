@@ -111,8 +111,16 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       await wikiApi.updatePage(currentWiki.id, currentPage.path, content);
-      // Reload the page to get the latest version
-      await get().loadPage(currentWiki.id, currentPage.path);
+      
+      // Extract the new title from the content to determine the new path
+      const newTitle = content.split('\n').find(line => line.trim())?.trim().replace(/^#+\s*/, '') || 'Untitled';
+      
+      // Reload pages list first to get the updated page list
+      await get().loadPages(currentWiki.id);
+      
+      // Load the page with the new title/path
+      await get().loadPage(currentWiki.id, newTitle);
+      
       set({ isLoading: false });
     } catch (error: any) {
       set({ error: getErrorMessage(error, 'Failed to save page'), isLoading: false });
