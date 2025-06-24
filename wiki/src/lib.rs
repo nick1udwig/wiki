@@ -1,5 +1,5 @@
 use hyperprocess_macro::hyperprocess;
-use hyperware_process_lib::{our, println, Address};
+use hyperware_process_lib::{get_state, our, println, Address};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use yrs::{Doc, GetString, Text, Transact, ReadTxn};
@@ -180,6 +180,7 @@ enum WikiMessage {
     SendInvite { invite: WikiInvite, wiki: Wiki },
     InviteResponse { invite_id: String, status: InviteStatus, invitee_id: String },
     RoleUpdate { wiki_id: String, member_id: String, new_role: WikiRole },
+    SearchPages { wiki_id: String, query: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +190,7 @@ enum WikiResponse {
     WikiData(Wiki),
     PageList(Vec<PageSummary>),
     PageData(PageInfo),
+    SearchResults(Vec<SearchResult>),
     Success(bool),
     Error(String),
 }
@@ -296,6 +298,16 @@ impl WikiState {
         // Extract just the node part from the full address
         let our_address = our();
         self.node_id = our_address.node().to_string();
+
+        if let Some(ref state) = get_state() {
+            if let Ok(WikiState { wikis, pages, my_memberships, invites, .. }) = rmp_serde::from_slice(state) {
+                self.wikis = wikis;
+                self.pages = pages;
+                self.my_memberships = my_memberships;
+                self.invites = invites;
+            }
+        }
+
         println!("Wiki node initialized with node ID: {}", self.node_id);
         println!("Full address: {}", our_address);
     }
@@ -407,7 +419,7 @@ impl WikiState {
             }
             WikiMessage::GetWikiPage { wiki_id, path } => {
                 match self.wikis.get(&wiki_id) {
-                    Some(wiki) => {
+                    Some(_wiki) => {
                         // Allow access to pages for both public and private wikis
                         // TODO: In production, verify requester is a member for private wikis
                         let page_key = format!("{}:{}", wiki_id, path);
@@ -423,10 +435,10 @@ impl WikiState {
                                     }
                                     new_doc
                                 });
-                            
+
                             let text = doc.get_or_insert_text("content");
                             let content = text.get_string(&doc.transact());
-                            
+
                             WikiResponse::PageData(PageInfo {
                                 path: page.path.clone(),
                                 wiki_id: page.wiki_id.clone(),
@@ -454,7 +466,7 @@ impl WikiState {
                         match wiki.members.get(&user_id) {
                             Some(role) if matches!(role, WikiRole::Writer | WikiRole::Admin | WikiRole::SuperAdmin) => {
                                 let page_key = format!("{}:{}", wiki_id, path);
-                                
+
                                 // Create CRDT document
                                 let doc = Doc::new();
                                 let text = doc.get_or_insert_text("content");
@@ -463,11 +475,11 @@ impl WikiState {
                                     text.insert(&mut txn, 0, &initial_content);
                                     txn.commit();
                                 }
-                                
+
                                 let mut encoder = EncoderV1::new();
                                 doc.transact().encode_state_as_update(&yrs::StateVector::default(), &mut encoder);
                                 let update = encoder.to_vec();
-                                
+
                                 let page = WikiPage {
                                     path: path.clone(),
                                     wiki_id: wiki_id.clone(),
@@ -478,10 +490,10 @@ impl WikiState {
                                     },
                                     yrs_doc: update,
                                 };
-                                
+
                                 self.pages.insert(page_key.clone(), page);
                                 self.active_docs.insert(page_key, doc);
-                                
+
                                 WikiResponse::Success(true)
                             }
                             _ => WikiResponse::Error("Insufficient permissions".to_string()),
@@ -497,7 +509,7 @@ impl WikiState {
                         match wiki.members.get(&user_id) {
                             Some(role) if matches!(role, WikiRole::Writer | WikiRole::Admin | WikiRole::SuperAdmin) => {
                                 let page_key = format!("{}:{}", wiki_id, path);
-                                
+
                                 let doc = self.active_docs.entry(page_key.clone())
                                     .or_insert_with(|| {
                                         if let Some(page) = self.pages.get(&page_key) {
@@ -513,9 +525,9 @@ impl WikiState {
                                             Doc::new()
                                         }
                                     });
-                                
+
                                 let text = doc.get_or_insert_text("content");
-                                
+
                                 // Replace content
                                 {
                                     let mut txn = doc.transact_mut();
@@ -526,12 +538,12 @@ impl WikiState {
                                     text.insert(&mut txn, 0, &content);
                                     txn.commit();
                                 }
-                                
+
                                 // Encode the update
                                 let mut encoder = EncoderV1::new();
                                 doc.transact().encode_state_as_update(&yrs::StateVector::default(), &mut encoder);
                                 let update = encoder.to_vec();
-                                
+
                                 if let Some(page) = self.pages.get_mut(&page_key) {
                                     page.current_version = PageVersion {
                                         content: update.clone(),
@@ -540,7 +552,7 @@ impl WikiState {
                                     };
                                     page.yrs_doc = update;
                                 }
-                                
+
                                 WikiResponse::Success(true)
                             }
                             _ => WikiResponse::Error("Insufficient permissions".to_string()),
@@ -556,7 +568,7 @@ impl WikiState {
                 } else {
                     // Store the invite
                     self.invites.insert(invite.id.clone(), invite.clone());
-                    
+
                     // Store the wiki data - but if it's from another node, store with remote ID
                     if invite.inviter_id != self.node_id {
                         // Store with remote reference ID to ensure P2P operations
@@ -574,7 +586,7 @@ impl WikiState {
                 // Update the invite status on the inviter's node
                 if let Some(invite) = self.invites.get_mut(&invite_id) {
                     invite.status = status.clone();
-                    
+
                     // If accepted, update the wiki membership
                     if status == InviteStatus::Accepted {
                         if let Some(wiki) = self.wikis.get_mut(&invite.wiki_id) {
@@ -594,7 +606,7 @@ impl WikiState {
                         membership.role = new_role.clone();
                         println!("Your role in wiki {} has been updated from {:?} to {:?}", wiki_id, old_role, new_role);
                     }
-                    
+
                     // Update the wiki - check for remote wikis stored with @ suffix
                     // First try to find the wiki with a remote reference
                     let mut wiki_found = false;
@@ -605,12 +617,88 @@ impl WikiState {
                             break;
                         }
                     }
-                    
+
                     if !wiki_found {
                         println!("Wiki {} not found locally for role update", wiki_id);
                     }
                 }
                 WikiResponse::Success(true)
+            }
+            WikiMessage::SearchPages { wiki_id, query } => {
+                // Search pages in the wiki
+                match self.wikis.get(&wiki_id) {
+                    Some(_wiki) => {
+                        // Allow search for both public and private wikis
+                        // In production, should verify requester is a member for private wikis
+                        let query_lower = query.to_lowercase();
+                        let mut results: Vec<SearchResult> = Vec::new();
+
+                        for (page_key, page) in &self.pages {
+                            if page.wiki_id != wiki_id {
+                                continue;
+                            }
+
+                            // Search in path and content
+                            let path_matches = page.path.to_lowercase().contains(&query_lower);
+                            
+                            // Decode CRDT content to get actual text
+                            let content = if let Some(doc) = self.active_docs.get(page_key) {
+                                // Use existing doc
+                                let text = doc.get_or_insert_text("content");
+                                let content_string = text.get_string(&doc.transact());
+                                content_string
+                            } else {
+                                // Create temporary doc to decode content
+                                let doc = Doc::new();
+                                {
+                                    let mut txn = doc.transact_mut();
+                                    if let Ok(update) = yrs::Update::decode_v1(&page.yrs_doc) {
+                                        let _ = txn.apply_update(update);
+                                    }
+                                }
+                                let text = doc.get_or_insert_text("content");
+                                let content_string = text.get_string(&doc.transact());
+                                content_string
+                            };
+                            
+                            let content_lower = content.to_lowercase();
+                            let content_matches = content_lower.contains(&query_lower);
+
+                            if path_matches || content_matches {
+                                // Create a snippet around the match
+                                let snippet = if content_matches {
+                                    if let Some(pos) = content_lower.find(&query_lower) {
+                                        let start = pos.saturating_sub(50);
+                                        let end = (pos + query_lower.len() + 50).min(content.len());
+                                        let mut snippet_text = content[start..end].to_string();
+                                        if start > 0 {
+                                            snippet_text = format!("...{}", snippet_text);
+                                        }
+                                        if end < content.len() {
+                                            snippet_text = format!("{}...", snippet_text);
+                                        }
+                                        snippet_text
+                                    } else {
+                                        content.chars().take(100).collect::<String>() + "..."
+                                    }
+                                } else {
+                                    // If match is only in path, show beginning of content
+                                    content.chars().take(100).collect::<String>() + "..."
+                                };
+
+                                results.push(SearchResult {
+                                    path: page.path.clone(),
+                                    updated_by: page.current_version.updated_by.clone(),
+                                    updated_at: page.current_version.updated_at.clone(),
+                                    snippet,
+                                });
+                            }
+                        }
+
+                        WikiResponse::SearchResults(results)
+                    }
+                    None => WikiResponse::Error("Wiki not found".to_string()),
+                }
             }
         };
 
@@ -651,7 +739,7 @@ impl WikiState {
     #[http]
     async fn list_wikis(&mut self) -> Result<String, String> {
         let mut all_wikis = Vec::new();
-        
+
         for membership in &self.my_memberships {
             // First check if the wiki exists locally
             let base_wiki_id = if membership.wiki_id.contains('@') {
@@ -659,20 +747,20 @@ impl WikiState {
             } else {
                 &membership.wiki_id
             };
-            
+
             // Check if we have the wiki stored locally
             if let Some(wiki) = self.wikis.get(&membership.wiki_id) {
                 // Found wiki with exact membership ID (could be wiki_id or wiki_id@node)
                 all_wikis.push(wiki.clone());
                 continue;
             }
-            
+
             // Also check base wiki ID for backwards compatibility
             if let Some(wiki) = self.wikis.get(base_wiki_id) {
                 all_wikis.push(wiki.clone());
                 continue;
             }
-            
+
             // Wiki doesn't exist locally, check if this is a remote wiki reference
             if membership.wiki_id.contains('@') {
                 // Parse the remote wiki reference
@@ -680,13 +768,13 @@ impl WikiState {
                 if parts.len() == 2 {
                     let wiki_id = parts[0];
                     let node_id = parts[1];
-                    
+
                     // Try to fetch the actual wiki data from the remote node
                     let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
                     let message = WikiMessage::GetWikiData {
                         wiki_id: wiki_id.to_string(),
                     };
-                    
+
                     if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
                         match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                             Ok(Ok(response_bytes)) => {
@@ -702,7 +790,7 @@ impl WikiState {
                             _ => {}
                         }
                     }
-                    
+
                     // Fallback if we can't fetch the data
                     let remote_wiki = Wiki {
                         id: wiki_id.to_string(),
@@ -736,7 +824,7 @@ impl WikiState {
         // Not a local wiki, check if we have a membership for a remote wiki
         let membership = self.my_memberships.iter()
             .find(|m| m.wiki_id == req.wiki_id || m.wiki_id.starts_with(&format!("{}@", req.wiki_id)));
-            
+
         if let Some(membership) = membership {
             // Check if this is a remote wiki reference
             if membership.wiki_id.contains('@') {
@@ -744,17 +832,17 @@ impl WikiState {
                 if parts.len() == 2 {
                     let wiki_id = parts[0];
                     let node_id = parts[1];
-                    
+
                     // Fetch the actual wiki data from the remote node
                     let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
                     let message = WikiMessage::GetWikiData {
                         wiki_id: wiki_id.to_string(),
                     };
-                    
+
                     let message_body = serde_json::to_string(&message)
                         .map_err(|e| format!("Failed to serialize message: {}", e))?
                         .into_bytes();
-                    
+
                     match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                         Ok(Ok(response_bytes)) => {
                             let response_str = String::from_utf8(response_bytes)
@@ -811,16 +899,16 @@ impl WikiState {
             if remote_node_id != &self.node_id {
                 // This is a remote wiki - fetch its info first
                 let target_address = Address::new(remote_node_id, ("wiki", "wiki", "sys"));
-                
+
                 // Create message to get public wiki info
                 let message = WikiMessage::GetPublicWiki {
                     wiki_id: req.wiki_id.clone(),
                 };
-                
+
                 let message_body = serde_json::to_string(&message)
                     .map_err(|e| format!("Failed to serialize message: {}", e))?
                     .into_bytes();
-                
+
                 // Query the remote node for wiki info
                 match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                     Ok(Ok(response_bytes)) => {
@@ -835,17 +923,17 @@ impl WikiState {
                                             return Err("Cannot join private wiki on remote node".to_string());
                                         }
                                     }
-                                    
+
                                     // Now send a join request to actually join the wiki
                                     let join_message = WikiMessage::JoinPublicWiki {
                                         wiki_id: req.wiki_id.clone(),
                                         user_id: self.node_id.clone(),
                                     };
-                                    
+
                                     let join_body = serde_json::to_string(&join_message)
                                         .map_err(|e| format!("Failed to serialize join message: {}", e))?
                                         .into_bytes();
-                                    
+
                                     match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, join_body).await {
                                         Ok(Ok(join_response)) => {
                                             let join_response_str = String::from_utf8(join_response)
@@ -859,7 +947,7 @@ impl WikiState {
                                                         role: WikiRole::Writer,
                                                         joined_at: Utc::now().to_rfc3339(),
                                                     });
-                                                    
+
                                                     println!("Successfully joined remote wiki {} on node {}", req.wiki_id, remote_node_id);
                                                     return Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap());
                                                 }
@@ -889,7 +977,7 @@ impl WikiState {
                         return Err(format!("Failed to contact remote node: {:?}", e));
                     }
                 }
-                
+
                 return Err("Failed to join remote wiki".to_string());
             }
         }
@@ -966,7 +1054,7 @@ impl WikiState {
             "add" => {
                 if let Some(role) = req.role.clone() {
                     wiki.members.insert(req.member_id.clone(), role.clone());
-                    
+
                     // Send notification to the new member
                     if req.member_id != self.node_id {
                         let target_address = Address::new(&req.member_id, ("wiki", "wiki", "sys"));
@@ -975,7 +1063,7 @@ impl WikiState {
                             member_id: req.member_id.clone(),
                             new_role: role,
                         };
-                        
+
                         if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
                             // Fire and forget notification
                             let _ = caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await;
@@ -985,7 +1073,7 @@ impl WikiState {
             }
             "remove" => {
                 wiki.members.remove(&req.member_id);
-                
+
                 // Notify the removed member
                 if req.member_id != self.node_id && previous_role.is_some() {
                     // For removed members, we can send a special notification
@@ -996,7 +1084,7 @@ impl WikiState {
             "update" => {
                 if let Some(role) = req.role.clone() {
                     wiki.members.insert(req.member_id.clone(), role.clone());
-                    
+
                     // Send notification if role actually changed
                     if req.member_id != self.node_id && previous_role.as_ref() != Some(&role) {
                         let target_address = Address::new(&req.member_id, ("wiki", "wiki", "sys"));
@@ -1005,7 +1093,7 @@ impl WikiState {
                             member_id: req.member_id.clone(),
                             new_role: role,
                         };
-                        
+
                         if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
                             // Fire and forget notification
                             let _ = caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await;
@@ -1023,14 +1111,14 @@ impl WikiState {
     async fn create_page(&mut self, body: String) -> Result<String, String> {
         let req: CreatePageRequest = serde_json::from_str(&body)
             .map_err(|e| format!("Invalid request: {}", e))?;
-        
+
         // Check if this is a remote wiki
         if req.wiki_id.contains('@') {
             let parts: Vec<&str> = req.wiki_id.split('@').collect();
             if parts.len() == 2 {
                 let wiki_id = parts[0];
                 let node_id = parts[1];
-                
+
                 // Send create page request to remote node
                 let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
                 let message = WikiMessage::CreatePage {
@@ -1039,11 +1127,11 @@ impl WikiState {
                     initial_content: req.initial_content.clone(),
                     user_id: self.node_id.clone(),
                 };
-                
+
                 let message_body = serde_json::to_string(&message)
                     .map_err(|e| format!("Failed to serialize message: {}", e))?
                     .into_bytes();
-                
+
                 match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                     Ok(Ok(response_bytes)) => {
                         let response_str = String::from_utf8(response_bytes)
@@ -1069,7 +1157,7 @@ impl WikiState {
                 }
             }
         }
-        
+
         // Local wiki handling
         self.check_permission(&req.wiki_id, WikiRole::Writer)?;
         let page_key = format!("{}:{}", req.wiki_id, req.path);
@@ -1111,14 +1199,14 @@ impl WikiState {
     async fn update_page(&mut self, body: String) -> Result<String, String> {
         let req: UpdatePageRequest = serde_json::from_str(&body)
             .map_err(|e| format!("Invalid request: {}", e))?;
-        
+
         // Check if this is a remote wiki
         if req.wiki_id.contains('@') {
             let parts: Vec<&str> = req.wiki_id.split('@').collect();
             if parts.len() == 2 {
                 let wiki_id = parts[0];
                 let node_id = parts[1];
-                
+
                 // Send update page request to remote node
                 let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
                 let message = WikiMessage::UpdatePage {
@@ -1127,11 +1215,11 @@ impl WikiState {
                     content: req.content.clone(),
                     user_id: self.node_id.clone(),
                 };
-                
+
                 let message_body = serde_json::to_string(&message)
                     .map_err(|e| format!("Failed to serialize message: {}", e))?
                     .into_bytes();
-                
+
                 match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                     Ok(Ok(response_bytes)) => {
                         let response_str = String::from_utf8(response_bytes)
@@ -1154,7 +1242,7 @@ impl WikiState {
                 }
             }
         }
-        
+
         // Local wiki handling
         self.check_permission(&req.wiki_id, WikiRole::Writer)?;
         let page_key = format!("{}:{}", req.wiki_id, req.path);
@@ -1211,25 +1299,25 @@ impl WikiState {
     async fn get_page(&mut self, body: String) -> Result<String, String> {
         let req: GetPageRequest = serde_json::from_str(&body)
             .map_err(|e| format!("Invalid request: {}", e))?;
-        
+
         // Check if this is for a remote wiki
         if req.wiki_id.contains('@') {
             let parts: Vec<&str> = req.wiki_id.split('@').collect();
             if parts.len() == 2 {
                 let wiki_id = parts[0];
                 let node_id = parts[1];
-                
+
                 // Fetch page from remote node
                 let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
                 let message = WikiMessage::GetWikiPage {
                     wiki_id: wiki_id.to_string(),
                     path: req.path.clone(),
                 };
-                
+
                 let message_body = serde_json::to_string(&message)
                     .map_err(|e| format!("Failed to serialize message: {}", e))?
                     .into_bytes();
-                
+
                 match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                     Ok(Ok(response_bytes)) => {
                         let response_str = String::from_utf8(response_bytes)
@@ -1252,7 +1340,7 @@ impl WikiState {
                 }
             }
         }
-        
+
         // Local wiki
         self.check_permission(&req.wiki_id, WikiRole::Reader)?;
 
@@ -1296,24 +1384,24 @@ impl WikiState {
     async fn list_pages(&mut self, body: String) -> Result<String, String> {
         let req: ListPagesRequest = serde_json::from_str(&body)
             .map_err(|e| format!("Invalid request: {}", e))?;
-        
+
         // Check if this is for a remote wiki
         if req.wiki_id.contains('@') {
             let parts: Vec<&str> = req.wiki_id.split('@').collect();
             if parts.len() == 2 {
                 let wiki_id = parts[0];
                 let node_id = parts[1];
-                
+
                 // Fetch pages from remote node
                 let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
                 let message = WikiMessage::GetWikiPages {
                     wiki_id: wiki_id.to_string(),
                 };
-                
+
                 let message_body = serde_json::to_string(&message)
                     .map_err(|e| format!("Failed to serialize message: {}", e))?
                     .into_bytes();
-                
+
                 match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                     Ok(Ok(response_bytes)) => {
                         let response_str = String::from_utf8(response_bytes)
@@ -1336,7 +1424,7 @@ impl WikiState {
                 }
             }
         }
-        
+
         // Local wiki
         self.check_permission(&req.wiki_id, WikiRole::Reader)?;
 
@@ -1365,6 +1453,256 @@ impl WikiState {
         self.active_docs.remove(&page_key);
 
         Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap())
+    }
+
+    #[http]
+    async fn search_pages(&mut self, body: String) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct SearchRequest {
+            wiki_id: String,
+            query: String,
+        }
+
+        let req: SearchRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("Invalid request: {}", e))?;
+
+        // For remote wikis, perform the search remotely
+        if req.wiki_id.contains('@') {
+            let parts: Vec<&str> = req.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+
+                // Send search request to remote node
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::SearchPages {
+                    wiki_id: wiki_id.to_string(),
+                    query: req.query.clone(),
+                };
+
+                let message_body = serde_json::to_string(&message)
+                    .map_err(|e| format!("Failed to serialize message: {}", e))?
+                    .into_bytes();
+
+                match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                    Ok(Ok(response_bytes)) => {
+                        let response_str = String::from_utf8(response_bytes)
+                            .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                        match serde_json::from_str::<WikiResponse>(&response_str) {
+                            Ok(WikiResponse::SearchResults(results)) => {
+                                return Ok(serde_json::to_string(&results).unwrap());
+                            }
+                            Ok(WikiResponse::Error(err)) => {
+                                return Err(format!("Remote search error: {}", err));
+                            }
+                            _ => {
+                                return Err("Unexpected response from remote node".to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err("Failed to search remote wiki".to_string());
+                    }
+                }
+            }
+        }
+
+        // For local wikis, check permissions and search directly
+        self.check_permission(&req.wiki_id, WikiRole::Reader)?;
+
+        let message = WikiMessage::SearchPages {
+            wiki_id: req.wiki_id,
+            query: req.query,
+        };
+        
+        // Process the message directly instead of calling handle_wiki_message
+        match message {
+            WikiMessage::SearchPages { wiki_id, query } => {
+                match self.wikis.get(&wiki_id) {
+                    Some(_) => {
+                        let query_lower = query.to_lowercase();
+                        let mut results: Vec<SearchResult> = Vec::new();
+
+                        for (page_key, page) in &self.pages {
+                            if page.wiki_id != wiki_id {
+                                continue;
+                            }
+
+                            // Search in path and content
+                            let path_matches = page.path.to_lowercase().contains(&query_lower);
+                            
+                            // Decode CRDT content to get actual text
+                            let content = if let Some(doc) = self.active_docs.get(page_key) {
+                                // Use existing doc
+                                let text = doc.get_or_insert_text("content");
+                                let content_string = text.get_string(&doc.transact());
+                                content_string
+                            } else {
+                                // Create temporary doc to decode content
+                                let doc = Doc::new();
+                                {
+                                    let mut txn = doc.transact_mut();
+                                    if let Ok(update) = yrs::Update::decode_v1(&page.yrs_doc) {
+                                        let _ = txn.apply_update(update);
+                                    }
+                                }
+                                let text = doc.get_or_insert_text("content");
+                                let content_string = text.get_string(&doc.transact());
+                                content_string
+                            };
+                            
+                            let content_lower = content.to_lowercase();
+                            let content_matches = content_lower.contains(&query_lower);
+
+                            if path_matches || content_matches {
+                                // Create a snippet around the match
+                                let snippet = if content_matches {
+                                    if let Some(pos) = content_lower.find(&query_lower) {
+                                        let start = pos.saturating_sub(50);
+                                        let end = (pos + query_lower.len() + 50).min(content.len());
+                                        let mut snippet_text = content[start..end].to_string();
+                                        if start > 0 {
+                                            snippet_text = format!("...{}", snippet_text);
+                                        }
+                                        if end < content.len() {
+                                            snippet_text = format!("{}...", snippet_text);
+                                        }
+                                        snippet_text
+                                    } else {
+                                        content.chars().take(100).collect::<String>() + "..."
+                                    }
+                                } else {
+                                    // If match is only in path, show beginning of content
+                                    content.chars().take(100).collect::<String>() + "..."
+                                };
+
+                                results.push(SearchResult {
+                                    path: page.path.clone(),
+                                    updated_by: page.current_version.updated_by.clone(),
+                                    updated_at: page.current_version.updated_at.clone(),
+                                    snippet,
+                                });
+                            }
+                        }
+
+                        Ok(serde_json::to_string(&results).unwrap())
+                    }
+                    None => Err("Wiki not found".to_string()),
+                }
+            }
+            _ => Err("Invalid message type".to_string()),
+        }
+    }
+    
+    #[http]
+    async fn search_pages_disabled(&mut self, body: String) -> Result<String, String> {
+        let req: SearchRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("Invalid request: {}", e))?;
+
+        // For remote wikis, perform the search remotely
+        if req.wiki_id.contains('@') {
+            let parts: Vec<&str> = req.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::SearchPages {
+                    wiki_id: wiki_id.to_string(),
+                    query: req.query.clone(),
+                };
+
+                let message_body = serde_json::to_string(&message)
+                    .map_err(|e| format!("Failed to serialize message: {}", e))?
+                    .into_bytes();
+
+                match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                    Ok(Ok(response_bytes)) => {
+                        let response_str = String::from_utf8(response_bytes)
+                            .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                        match serde_json::from_str::<WikiResponse>(&response_str) {
+                            Ok(WikiResponse::SearchResults(results)) => {
+                                return Ok(serde_json::to_string(&results).unwrap());
+                            }
+                            Ok(WikiResponse::Error(e)) => return Err(e),
+                            _ => return Err("Unexpected response from remote search".to_string()),
+                        }
+                    }
+                    _ => return Err("Failed to search remote wiki".to_string()),
+                }
+            }
+        }
+
+        // For local wikis, check permissions
+        self.check_permission(&req.wiki_id, WikiRole::Reader)?;
+
+        let query_lower = req.query.to_lowercase();
+        let mut results: Vec<SearchResult> = Vec::new();
+
+        // Search through all pages in the wiki
+        for (page_key, page) in &self.pages {
+            if page.wiki_id != req.wiki_id {
+                continue;
+            }
+
+            // Search in path and content
+            let path_matches = page.path.to_lowercase().contains(&query_lower);
+            
+            // Decode CRDT content to get actual text
+            let content = if let Some(doc) = self.active_docs.get(page_key) {
+                // Use existing doc
+                let text = doc.get_or_insert_text("content");
+                let txn = doc.transact();
+                text.get_string(&txn)
+            } else {
+                // Create temporary doc to decode content
+                let doc = Doc::new();
+                {
+                    let mut txn = doc.transact_mut();
+                    if let Ok(update) = yrs::Update::decode_v1(&page.yrs_doc) {
+                        let _ = txn.apply_update(update);
+                    }
+                }
+                let text = doc.get_or_insert_text("content");
+                let txn = doc.transact();
+                text.get_string(&txn)
+            };
+            
+            let content_lower = content.to_lowercase();
+            let content_matches = content_lower.contains(&query_lower);
+
+            if path_matches || content_matches {
+                // Create a snippet around the match
+                let snippet = if content_matches {
+                    if let Some(pos) = content_lower.find(&query_lower) {
+                        let start = pos.saturating_sub(50);
+                        let end = (pos + query_lower.len() + 50).min(content.len());
+                        let mut snippet_text = content[start..end].to_string();
+                        if start > 0 {
+                            snippet_text = format!("...{}", snippet_text);
+                        }
+                        if end < content.len() {
+                            snippet_text = format!("{}...", snippet_text);
+                        }
+                        snippet_text
+                    } else {
+                        content.chars().take(100).collect::<String>() + "..."
+                    }
+                } else {
+                    // If match is only in path, show beginning of content
+                    content.chars().take(100).collect::<String>() + "..."
+                };
+
+                results.push(SearchResult {
+                    path: page.path.clone(),
+                    updated_by: page.current_version.updated_by.clone(),
+                    updated_at: page.current_version.updated_at.clone(),
+                    snippet,
+                });
+            }
+        }
+
+        Ok(serde_json::to_string(&results).unwrap())
     }
 
     #[http]
@@ -1565,11 +1903,11 @@ impl WikiState {
             invite: invite.clone(),
             wiki: wiki.clone(),
         };
-        
+
         let message_body = serde_json::to_string(&message)
             .map_err(|e| format!("Failed to serialize invite message: {}", e))?
             .into_bytes();
-        
+
         match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
             Ok(Ok(response_bytes)) => {
                 let response_str = String::from_utf8(response_bytes)
@@ -1657,7 +1995,7 @@ impl WikiState {
         let invite_id = invite.id.clone();
         let invite_status = invite.status.clone();
         let invitee_id = self.node_id.clone();
-        
+
         // Send async notification to inviter
         let target_address = Address::new(&inviter_id, ("wiki", "wiki", "sys"));
         let message = WikiMessage::InviteResponse {
@@ -1665,7 +2003,7 @@ impl WikiState {
             status: invite_status.clone(),
             invitee_id,
         };
-        
+
         if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
             // Fire and forget - we don't wait for the response
             let _ = caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await;
@@ -1704,16 +2042,365 @@ impl WikiState {
         Ok(serde_json::to_string(&my_invites).unwrap())
     }
 
+    #[http]
+    async fn search_all_wikis(&mut self, body: String) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct SearchAllRequest {
+            query: String,
+        }
+
+        let req: SearchAllRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("Invalid request: {}", e))?;
+
+        let query_lower = req.query.to_lowercase();
+
+        #[derive(Serialize)]
+        struct GlobalSearchResult {
+            wiki_id: String,
+            wiki_name: String,
+            path: String,
+            updated_by: String,
+            updated_at: String,
+            snippet: String,
+        }
+
+        let mut all_results: Vec<GlobalSearchResult> = Vec::new();
+
+        // Search in local wikis where user has access
+        for (wiki_id, wiki) in &self.wikis {
+            // Check if user has access to this wiki
+            let has_access = wiki.is_public ||
+                             wiki.members.contains_key(&self.node_id) ||
+                             self.my_memberships.iter().any(|m| m.wiki_id == *wiki_id || m.wiki_id.starts_with(&format!("{}@", wiki_id)));
+
+            if !has_access {
+                continue;
+            }
+
+            // Search pages in this wiki directly
+            let mut results: Vec<SearchResult> = Vec::new();
+
+            for (page_key, page) in &self.pages {
+                if page.wiki_id != *wiki_id {
+                    continue;
+                }
+
+                // Search in path and content
+                let path_matches = page.path.to_lowercase().contains(&query_lower);
+                
+                // Decode CRDT content to get actual text
+                let content = if let Some(doc) = self.active_docs.get(page_key) {
+                    // Use existing doc
+                    let text = doc.get_or_insert_text("content");
+                    let content_string = text.get_string(&doc.transact());
+                    content_string
+                } else {
+                    // Create temporary doc to decode content
+                    let doc = Doc::new();
+                    {
+                        let mut txn = doc.transact_mut();
+                        if let Ok(update) = yrs::Update::decode_v1(&page.yrs_doc) {
+                            let _ = txn.apply_update(update);
+                        }
+                    }
+                    let text = doc.get_or_insert_text("content");
+                    let content_string = text.get_string(&doc.transact());
+                    content_string
+                };
+                
+                let content_lower = content.to_lowercase();
+                let content_matches = content_lower.contains(&query_lower);
+
+                if path_matches || content_matches {
+                    // Create a snippet around the match
+                    let snippet = if content_matches {
+                        if let Some(pos) = content_lower.find(&query_lower) {
+                            let start = pos.saturating_sub(50);
+                            let end = (pos + query_lower.len() + 50).min(content.len());
+                            let mut snippet_text = content[start..end].to_string();
+                            if start > 0 {
+                                snippet_text = format!("...{}", snippet_text);
+                            }
+                            if end < content.len() {
+                                snippet_text = format!("{}...", snippet_text);
+                            }
+                            snippet_text
+                        } else {
+                            content.chars().take(100).collect::<String>() + "..."
+                        }
+                    } else {
+                        // If match is only in path, show beginning of content
+                        content.chars().take(100).collect::<String>() + "..."
+                    };
+
+                    results.push(SearchResult {
+                        path: page.path.clone(),
+                        updated_by: page.current_version.updated_by.clone(),
+                        updated_at: page.current_version.updated_at.clone(),
+                        snippet,
+                    });
+                }
+            }
+
+            // Add results from this wiki to global results
+            for result in results {
+                all_results.push(GlobalSearchResult {
+                    wiki_id: wiki_id.clone(),
+                    wiki_name: wiki.name.clone(),
+                    path: result.path,
+                    updated_by: result.updated_by,
+                    updated_at: result.updated_at,
+                    snippet: result.snippet,
+                });
+            }
+        }
+
+        // Search remote wikis that user is a member of
+        for membership in &self.my_memberships {
+            // Skip local wikis (already searched above)
+            if !membership.wiki_id.contains('@') {
+                continue;
+            }
+            
+            // Parse remote wiki reference
+            let parts: Vec<&str> = membership.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+                
+                // Send search request to remote node
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::SearchPages {
+                    wiki_id: wiki_id.to_string(),
+                    query: req.query.clone(),
+                };
+                
+                if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
+                    match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                        Ok(Ok(response_bytes)) => {
+                            if let Ok(response_str) = String::from_utf8(response_bytes) {
+                                if let Ok(WikiResponse::SearchResults(results)) = serde_json::from_str::<WikiResponse>(&response_str) {
+                                    // Get wiki name from stored remote wiki
+                                    let wiki_name = if let Some(wiki) = self.wikis.get(&membership.wiki_id) {
+                                        wiki.name.clone()
+                                    } else {
+                                        format!("Remote Wiki on {}", node_id)
+                                    };
+                                    
+                                    // Add remote results to global results
+                                    for result in results {
+                                        all_results.push(GlobalSearchResult {
+                                            wiki_id: membership.wiki_id.clone(),
+                                            wiki_name: wiki_name.clone(),
+                                            path: result.path,
+                                            updated_by: result.updated_by,
+                                            updated_at: result.updated_at,
+                                            snippet: result.snippet,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {} // Ignore errors from remote searches
+                    }
+                }
+            }
+        }
+
+        Ok(serde_json::to_string(&all_results).unwrap())
+    }
+    
+    #[http]
+    async fn search_all_wikis_disabled(&mut self, body: String) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct SearchAllRequest {
+            query: String,
+        }
+
+        let req: SearchAllRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("Invalid request: {}", e))?;
+
+        let query_lower = req.query.to_lowercase();
+
+        #[derive(Serialize)]
+        struct GlobalSearchResult {
+            wiki_id: String,
+            wiki_name: String,
+            path: String,
+            updated_by: String,
+            updated_at: String,
+            snippet: String,
+        }
+
+        let mut all_results: Vec<GlobalSearchResult> = Vec::new();
+
+        // Search in local wikis where user has access
+        for (wiki_id, wiki) in &self.wikis {
+            // Check if user has access to this wiki
+            let has_access = wiki.is_public ||
+                             wiki.members.contains_key(&self.node_id) ||
+                             self.my_memberships.iter().any(|m| m.wiki_id == *wiki_id || m.wiki_id.starts_with(&format!("{}@", wiki_id)));
+
+            if !has_access {
+                continue;
+            }
+
+            // Search pages in this wiki
+            for (_, page) in &self.pages {
+                if page.wiki_id != *wiki_id {
+                    continue;
+                }
+
+                // Search in path and content
+                let path_matches = page.path.to_lowercase().contains(&query_lower);
+                
+                // Get page key
+                let page_key_str = format!("{}:{}", wiki_id, page.path);
+                
+                // Decode CRDT content to get actual text
+                let content = if let Some(doc) = self.active_docs.get(&page_key_str) {
+                    // Use existing doc
+                    let text = doc.get_or_insert_text("content");
+                    text.get_string(&doc.transact())
+                } else {
+                    // Create temporary doc to decode content
+                    let doc = Doc::new();
+                    {
+                        let mut txn = doc.transact_mut();
+                        if let Ok(update) = yrs::Update::decode_v1(&page.yrs_doc) {
+                            let _ = txn.apply_update(update);
+                        }
+                    }
+                    let text = doc.get_or_insert_text("content");
+                    let content_string = text.get_string(&doc.transact());
+                    content_string
+                };
+                
+                let content_lower = content.to_lowercase();
+                let content_matches = content_lower.contains(&query_lower);
+
+                if path_matches || content_matches {
+                    // Create a snippet around the match
+                    let snippet = if content_matches {
+                        if let Some(pos) = content_lower.find(&query_lower) {
+                            let start = pos.saturating_sub(50);
+                            let end = (pos + query_lower.len() + 50).min(content.len());
+                            let mut snippet_text = content[start..end].to_string();
+                            if start > 0 {
+                                snippet_text = format!("...{}", snippet_text);
+                            }
+                            if end < content.len() {
+                                snippet_text = format!("{}...", snippet_text);
+                            }
+                            snippet_text
+                        } else {
+                            content.chars().take(100).collect::<String>() + "..."
+                        }
+                    } else {
+                        // If match is only in path, show beginning of content
+                        content.chars().take(100).collect::<String>() + "..."
+                    };
+
+                    all_results.push(GlobalSearchResult {
+                        wiki_id: wiki_id.clone(),
+                        wiki_name: wiki.name.clone(),
+                        path: page.path.clone(),
+                        updated_by: page.current_version.updated_by.clone(),
+                        updated_at: page.current_version.updated_at.clone(),
+                        snippet,
+                    });
+                }
+            }
+        }
+
+        // Search remote wikis that user is a member of
+        for membership in &self.my_memberships {
+            // Skip local wikis (already searched above)
+            if !membership.wiki_id.contains('@') {
+                continue;
+            }
+            
+            // Parse remote wiki reference
+            let parts: Vec<&str> = membership.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+                
+                // Send search request to remote node
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::SearchPages {
+                    wiki_id: wiki_id.to_string(),
+                    query: req.query.clone(),
+                };
+                
+                if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
+                    match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                        Ok(Ok(response_bytes)) => {
+                            if let Ok(response_str) = String::from_utf8(response_bytes) {
+                                if let Ok(WikiResponse::SearchResults(results)) = serde_json::from_str::<WikiResponse>(&response_str) {
+                                    // Get wiki name from remote node
+                                    let wiki_name = if let Ok(wiki_data) = self.get_remote_wiki_data(wiki_id, node_id).await {
+                                        wiki_data.name
+                                    } else {
+                                        format!("Remote Wiki on {}", node_id)
+                                    };
+                                    
+                                    // Add remote results to global results
+                                    for result in results {
+                                        all_results.push(GlobalSearchResult {
+                                            wiki_id: membership.wiki_id.clone(),
+                                            wiki_name: wiki_name.clone(),
+                                            path: result.path,
+                                            updated_by: result.updated_by,
+                                            updated_at: result.updated_at,
+                                            snippet: result.snippet,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {} // Ignore errors from remote searches
+                    }
+                }
+            }
+        }
+
+        Ok(serde_json::to_string(&all_results).unwrap())
+    }
+
 }
 
 impl WikiState {
+    async fn get_remote_wiki_data(&self, wiki_id: &str, node_id: &str) -> Result<Wiki, String> {
+        let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+        let message = WikiMessage::GetWikiData {
+            wiki_id: wiki_id.to_string(),
+        };
+        
+        let message_body = serde_json::to_string(&message)
+            .map_err(|e| format!("Failed to serialize message: {}", e))?
+            .into_bytes();
+        
+        match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+            Ok(Ok(response_bytes)) => {
+                let response_str = String::from_utf8(response_bytes)
+                    .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                match serde_json::from_str::<WikiResponse>(&response_str) {
+                    Ok(WikiResponse::WikiData(wiki)) => Ok(wiki),
+                    _ => Err("Failed to get wiki data".to_string()),
+                }
+            }
+            _ => Err("Failed to contact remote node".to_string()),
+        }
+    }
+    
     fn check_permission(&self, wiki_id: &str, required_role: WikiRole) -> Result<(), String> {
         // For remote wikis (format: wiki_id@node_id), check our membership
         if wiki_id.contains('@') {
             // For remote wikis, check if we have a membership
             let has_membership = self.my_memberships.iter()
                 .any(|m| m.wiki_id == wiki_id || m.wiki_id.starts_with(&format!("{}@", wiki_id)));
-            
+
             if has_membership {
                 // For remote wikis, we assume reader permissions
                 // More sophisticated permission checks would require P2P communication
@@ -1725,7 +2412,7 @@ impl WikiState {
                 return Err("Not a member of this wiki".to_string());
             }
         }
-        
+
         // Local wiki check
         let wiki = self.wikis.get(wiki_id)
             .ok_or_else(|| "Wiki not found".to_string())?;

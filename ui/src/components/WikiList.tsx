@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useWikiStore } from '../store/wikiStore';
+import { SearchBox } from './SearchBox';
 import { wikiApi, WikiInfo } from '../api/wiki';
 import './WikiList.css';
 
 export function WikiList() {
-  const { wikis, loadWikis, createWiki, selectWiki, joinWiki, isLoading, error } = useWikiStore();
+  const { wikis, loadWikis, createWiki, selectWiki, joinWiki, loadPage, isLoading, error } = useWikiStore();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showJoinForm, setShowJoinForm] = useState(false);
   const [newWiki, setNewWiki] = useState({ name: '', description: '', is_public: false });
@@ -55,19 +56,51 @@ export function WikiList() {
     <div className="wiki-list">
       <div className="wiki-list-header">
         <h2>My Wikis</h2>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button 
-            className="create-wiki-btn"
-            onClick={() => setShowCreateForm(true)}
-          >
-            Create New Wiki
-          </button>
-          <button 
-            onClick={() => setShowJoinForm(true)}
-            style={{ backgroundColor: '#9b59b6' }}
-          >
-            Join Wiki
-          </button>
+        <div className="wiki-list-controls">
+          <SearchBox
+            onSearch={async (query) => {
+              const results = await wikiApi.searchAllWikis(query);
+              return results.map(r => ({
+                path: `${r.wiki_name} / ${r.path}`,
+                updated_by: r.updated_by,
+                updated_at: r.updated_at,
+                snippet: r.snippet,
+                // Store wiki_id and path for navigation
+                __wiki_id: r.wiki_id,
+                __page_path: r.path
+              } as any));
+            }}
+            onSelectResult={async (combinedPath) => {
+              // Parse the combined path to extract wiki and page
+              const parts = combinedPath.split(' / ');
+              if (parts.length >= 2) {
+                const wikiName = parts[0];
+                const pagePath = parts.slice(1).join(' / ');
+                
+                // Find the wiki by name and navigate
+                const wiki = wikis.find(w => w.name === wikiName);
+                if (wiki) {
+                  await selectWiki(wiki);
+                  await loadPage(wiki.id, pagePath);
+                }
+              }
+            }}
+            placeholder="Search all wikis..."
+          />
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button 
+              className="create-wiki-btn"
+              onClick={() => setShowCreateForm(true)}
+            >
+              Create New Wiki
+            </button>
+            <button 
+              onClick={() => setShowJoinForm(true)}
+              style={{ backgroundColor: '#9b59b6' }}
+            >
+              Join Wiki
+            </button>
+          </div>
         </div>
       </div>
 

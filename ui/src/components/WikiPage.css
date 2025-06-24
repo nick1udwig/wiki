@@ -41,6 +41,41 @@
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   overflow-y: auto;
+  transition: transform 0.3s ease, width 0.3s ease;
+  position: relative;
+}
+
+.wiki-sidebar.collapsed {
+  width: 0;
+  transform: translateX(-250px);
+}
+
+.sidebar-toggle {
+  position: fixed;
+  left: 250px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0 4px 4px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+  z-index: 10;
+}
+
+.wiki-sidebar.collapsed ~ .sidebar-toggle {
+  left: 0;
+}
+
+.sidebar-toggle:hover {
+  background: var(--bg-tertiary);
 }
 
 .sidebar-header {
@@ -55,6 +90,11 @@
   margin: 0;
   font-size: 1.1rem;
   color: var(--text-primary);
+}
+
+.sidebar-search {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .create-page-btn {
@@ -232,4 +272,96 @@
 
 .mode-toggle-btn:hover {
   background: #27ae60;
+}
+
+/* Mobile responsive styles */
+@media (max-width: 768px) {
+  .wiki-header {
+    padding: 1rem;
+    flex-wrap: wrap;
+  }
+  
+  .wiki-header h1 {
+    font-size: 1.2rem;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  
+  .wiki-info {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  
+  .wiki-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 100;
+    box-shadow: 2px 0 8px rgba(0,0,0,0.2);
+  }
+  
+  .wiki-sidebar.collapsed {
+    transform: translateX(-100%);
+  }
+  
+  .sidebar-toggle {
+    z-index: 101;
+  }
+  
+  .wiki-sidebar:not(.collapsed) ~ .sidebar-toggle {
+    left: 250px;
+  }
+  
+  .wiki-sidebar.collapsed ~ .sidebar-toggle {
+    left: 0;
+  }
+  
+  .wiki-main {
+    margin-left: 0;
+  }
+  
+  .wiki-content {
+    position: relative;
+  }
+  
+  .admin-btn,
+  .mode-toggle-btn,
+  .invite-btn {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+  }
+  
+  .back-button {
+    padding: 0.4rem;
+    font-size: 0.85rem;
+  }
+  
+  .create-page-btn {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+  }
+  
+  .invite-modal-content {
+    padding: 1.5rem;
+    width: 95%;
+  }
+}
+
+/* Overlay for mobile when sidebar is open */
+@media (max-width: 768px) {
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99;
+  }
+  
+  .sidebar-overlay.active {
+    display: block;
+  }
 }

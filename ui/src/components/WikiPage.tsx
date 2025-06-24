@@ -4,15 +4,17 @@ import { PageEditor } from './PageEditor';
 import { PageViewer } from './PageViewer';
 import { PageList } from './PageList';
 import { AdminView } from './AdminView';
+import { SearchBox } from './SearchBox';
 import { wikiApi, WikiRole } from '../api/wiki';
 import './WikiPage.css';
 
 export function WikiPage() {
-  const { currentWiki, currentPage, selectWiki, createPage, loadPages, loadWiki } = useWikiStore();
+  const { currentWiki, currentPage, selectWiki, createPage, loadPages, loadWiki, loadPage } = useWikiStore();
   const [showCreatePage, setShowCreatePage] = useState(false);
   const [newPagePath, setNewPagePath] = useState('');
   const [showAdminView, setShowAdminView] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
 
   if (!currentWiki) {
@@ -95,7 +97,7 @@ export function WikiPage() {
 
       
       <div className="wiki-content">
-        <aside className="wiki-sidebar">
+        <aside className={`wiki-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
           <div className="sidebar-header">
             <h3>Pages</h3>
             {canEdit && (
@@ -106,6 +108,14 @@ export function WikiPage() {
                 + New Page
               </button>
             )}
+          </div>
+          
+          <div className="sidebar-search">
+            <SearchBox
+              onSearch={(query) => wikiApi.searchPages(currentWiki.id, query)}
+              onSelectResult={(path) => loadPage(currentWiki.id, path)}
+              placeholder="Search in this wiki..."
+            />
           </div>
           
           {showCreatePage && (
@@ -126,6 +136,13 @@ export function WikiPage() {
           
           <PageList />
         </aside>
+        <button 
+          className="sidebar-toggle"
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {sidebarCollapsed ? '→' : '←'}
+        </button>
         
         <main className="wiki-main">
           {currentPage ? (
@@ -140,6 +157,11 @@ export function WikiPage() {
             </div>
           )}
         </main>
+        {/* Mobile overlay */}
+        <div 
+          className={`sidebar-overlay ${!sidebarCollapsed ? 'active' : ''}`}
+          onClick={() => setSidebarCollapsed(true)}
+        />
       </div>
       
       {showAdminView && (

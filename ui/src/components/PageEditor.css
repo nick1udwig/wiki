@@ -148,3 +148,62 @@
   font-size: 0.85rem;
   color: var(--text-secondary);
 }
+
+/* Mobile responsive styles */
+@media (max-width: 768px) {
+  .page-editor {
+    margin: 0.5rem;
+  }
+  
+  .editor-header {
+    padding: 0.75rem 1rem;
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: stretch;
+  }
+  
+  .editor-header h2 {
+    font-size: 1.2rem;
+  }
+  
+  .editor-toolbar {
+    justify-content: space-between;
+  }
+  
+  .editor-toolbar button {
+    flex: 1;
+    font-size: 0.85rem;
+  }
+  
+  .editor-content {
+    padding: 1rem;
+  }
+  
+  .markdown-editor {
+    min-height: 300px;
+    font-size: 0.85rem;
+  }
+  
+  .page-meta {
+    padding: 0.5rem 1rem;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8rem;
+  }
+  
+  .markdown-preview {
+    padding: 0 0.5rem;
+  }
+  
+  .markdown-preview h1 {
+    font-size: 1.5rem;
+  }
+  
+  .markdown-preview h2 {
+    font-size: 1.2rem;
+  }
+  
+  .markdown-preview h3 {
+    font-size: 1rem;
+  }
+}
