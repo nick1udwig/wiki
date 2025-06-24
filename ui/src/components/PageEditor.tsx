@@ -3,7 +3,7 @@ import { useWikiStore } from '../store/wikiStore';
 import './PageEditor.css';
 
 export function PageEditor() {
-  const { currentPage, savePage, isLoading } = useWikiStore();
+  const { currentPage, currentWiki, savePage, loadPage, isLoading } = useWikiStore();
   const [content, setContent] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -24,6 +24,36 @@ export function PageEditor() {
   const handleCancel = () => {
     setContent(currentPage.content || '');
     setIsEditing(false);
+  };
+
+  const handleLinkClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'A') {
+      e.preventDefault();
+      const href = target.getAttribute('href');
+      if (!href) return;
+
+      // Check if it's an internal link (no protocol or starts with #)
+      if (!href.match(/^https?:\/\//) && !href.match(/^mailto:/) && !href.match(/^tel:/)) {
+        // Internal link
+        const [pagePath, anchor] = href.split('#');
+        if (currentWiki && pagePath) {
+          loadPage(currentWiki.id, pagePath);
+        }
+        if (anchor) {
+          // Scroll to anchor after page loads
+          setTimeout(() => {
+            const element = document.getElementById(anchor);
+            if (element) {
+              element.scrollIntoView({ behavior: 'smooth' });
+            }
+          }, 100);
+        }
+      } else {
+        // External link - open in new tab
+        window.open(href, '_blank', 'noopener,noreferrer');
+      }
+    }
   };
 
   return (
@@ -59,7 +89,7 @@ export function PageEditor() {
             placeholder="Write your content in Markdown..."
           />
         ) : (
-          <div className="markdown-preview">
+          <div className="markdown-preview" onClick={handleLinkClick}>
             <div dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }} />
           </div>
         )}
@@ -87,18 +117,34 @@ function parseMarkdown(text: string): string {
     return `__CODE_BLOCK_${index}__`;
   });
 
-  // Parse headers
-  parsed = parsed.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-  parsed = parsed.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-  parsed = parsed.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  // Parse headers with IDs for anchor links
+  parsed = parsed.replace(/^### (.*$)/gim, (match, heading) => {
+    const id = heading.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-');
+    return `<h3 id="${id}">${heading}</h3>`;
+  });
+  parsed = parsed.replace(/^## (.*$)/gim, (match, heading) => {
+    const id = heading.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-');
+    return `<h2 id="${id}">${heading}</h2>`;
+  });
+  parsed = parsed.replace(/^# (.*$)/gim, (match, heading) => {
+    const id = heading.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-');
+    return `<h1 id="${id}">${heading}</h1>`;
+  });
   
   // Parse inline formatting
   parsed = parsed.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   parsed = parsed.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   parsed = parsed.replace(/`([^`]+)`/g, '<code>$1</code>');
   
-  // Parse links
-  parsed = parsed.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  // Parse links - handle both internal and external
+  parsed = parsed.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, href) => {
+    // Check if it's an external link
+    if (href.match(/^https?:\/\//) || href.match(/^mailto:/) || href.match(/^tel:/)) {
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+    }
+    // Internal link
+    return `<a href="${href}">${text}</a>`;
+  });
   
   // Parse lists
   parsed = parsed.replace(/^\* (.+)$/gim, '<li>$1</li>');
