@@ -13,7 +13,7 @@ export function WikiPage() {
   const [showCreatePage, setShowCreatePage] = useState(false);
   const [newPagePath, setNewPagePath] = useState('');
   const [showAdminView, setShowAdminView] = useState(false);
-  const [isEditMode, setIsEditMode] = useState(false);
+  const [isEditMode, setIsEditMode] = useState<boolean | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
 
@@ -28,6 +28,11 @@ export function WikiPage() {
     await createPage(newPagePath, `# ${newPagePath}\n\nStart writing your content here...`);
     setShowCreatePage(false);
     setNewPagePath('');
+    
+    // Collapse sidebar on mobile after creating page
+    if (isMobile) {
+      setSidebarCollapsed(true);
+    }
   };
 
   const handleToggleEditMode = async () => {
@@ -58,6 +63,16 @@ export function WikiPage() {
   
   // Writers can now edit remote wikis through P2P
   const canEdit = canWrite;
+  
+  // Set default edit mode for writers when a page is loaded
+  useEffect(() => {
+    if (currentPage && isEditMode === null && canWrite) {
+      setIsEditMode(true);
+    }
+  }, [currentPage, canWrite, isEditMode]);
+  
+  // Check if on mobile
+  const isMobile = window.innerWidth <= 768;
 
   return (
     <div className="wiki-page">
@@ -113,7 +128,13 @@ export function WikiPage() {
           <div className="sidebar-search">
             <SearchBox
               onSearch={(query) => wikiApi.searchPages(currentWiki.id, query)}
-              onSelectResult={(path) => loadPage(currentWiki.id, path)}
+              onSelectResult={(path) => {
+                loadPage(currentWiki.id, path);
+                // Collapse sidebar on mobile after selecting page
+                if (isMobile) {
+                  setSidebarCollapsed(true);
+                }
+              }}
               placeholder="Search in this wiki..."
             />
           </div>
@@ -134,7 +155,13 @@ export function WikiPage() {
             </form>
           )}
           
-          <PageList />
+          <PageList onPageSelect={(path) => {
+            loadPage(currentWiki.id, path);
+            // Collapse sidebar on mobile after selecting page
+            if (isMobile) {
+              setSidebarCollapsed(true);
+            }
+          }} />
         </aside>
         <button 
           className="sidebar-toggle"

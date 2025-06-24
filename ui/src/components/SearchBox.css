@@ -89,6 +89,11 @@
   color: var(--text-tertiary);
 }
 
+.wiki-name {
+  color: #3498db;
+  font-weight: 500;
+}
+
 /* Mobile responsive */
 @media (max-width: 768px) {
   .search-box {

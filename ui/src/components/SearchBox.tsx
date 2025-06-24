@@ -3,14 +3,14 @@ import { SearchResult } from '../api/wiki';
 import './SearchBox.css';
 
 interface SearchBoxProps {
-  onSearch: (query: string) => Promise<SearchResult[]>;
-  onSelectResult: (path: string) => void;
+  onSearch: (query: string) => Promise<any[]>;
+  onSelectResult: (path: string, result?: any) => void;
   placeholder?: string;
 }
 
 export function SearchBox({ onSearch, onSelectResult, placeholder = "Search pages..." }: SearchBoxProps) {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [results, setResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -69,8 +69,8 @@ export function SearchBox({ onSearch, onSelectResult, placeholder = "Search page
     };
   }, [query, onSearch]);
 
-  const handleSelectResult = (path: string) => {
-    onSelectResult(path);
+  const handleSelectResult = (path: string, result: any) => {
+    onSelectResult(path, result);
     setQuery('');
     setShowResults(false);
   };
@@ -95,9 +95,12 @@ export function SearchBox({ onSearch, onSelectResult, placeholder = "Search page
             <div
               key={`${result.path}-${index}`}
               className="search-result-item"
-              onClick={() => handleSelectResult(result.path)}
+              onClick={() => handleSelectResult(result.path, result)}
             >
-              <div className="search-result-path">{result.path}</div>
+              <div className="search-result-path">
+                {result.wiki_name && <span className="wiki-name">{result.wiki_name} / </span>}
+                {result.path}
+              </div>
               <div className="search-result-snippet">{result.snippet}</div>
               <div className="search-result-meta">
                 Updated by {result.updated_by} • {new Date(result.updated_at).toLocaleDateString()}

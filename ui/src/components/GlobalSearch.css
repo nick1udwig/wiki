@@ -1,0 +1,11 @@
+.global-search {
+  flex: 1;
+  max-width: 400px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .global-search {
+    max-width: 100%;
+  }
+}

@@ -55,52 +55,21 @@ export function WikiList() {
   return (
     <div className="wiki-list">
       <div className="wiki-list-header">
-        <h2>My Wikis</h2>
         <div className="wiki-list-controls">
-          <SearchBox
-            onSearch={async (query) => {
-              const results = await wikiApi.searchAllWikis(query);
-              return results.map(r => ({
-                path: `${r.wiki_name} / ${r.path}`,
-                updated_by: r.updated_by,
-                updated_at: r.updated_at,
-                snippet: r.snippet,
-                // Store wiki_id and path for navigation
-                __wiki_id: r.wiki_id,
-                __page_path: r.path
-              } as any));
-            }}
-            onSelectResult={async (combinedPath) => {
-              // Parse the combined path to extract wiki and page
-              const parts = combinedPath.split(' / ');
-              if (parts.length >= 2) {
-                const wikiName = parts[0];
-                const pagePath = parts.slice(1).join(' / ');
-                
-                // Find the wiki by name and navigate
-                const wiki = wikis.find(w => w.name === wikiName);
-                if (wiki) {
-                  await selectWiki(wiki);
-                  await loadPage(wiki.id, pagePath);
-                }
-              }
-            }}
-            placeholder="Search all wikis..."
-          />
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button 
-              className="create-wiki-btn"
-              onClick={() => setShowCreateForm(true)}
-            >
-              Create New Wiki
-            </button>
-            <button 
-              onClick={() => setShowJoinForm(true)}
-              style={{ backgroundColor: '#9b59b6' }}
-            >
-              Join Wiki
-            </button>
-          </div>
+          <button 
+            className="create-wiki-btn icon-btn"
+            onClick={() => setShowCreateForm(true)}
+            title="Create New Wiki"
+          >
+            +
+          </button>
+          <button 
+            className="join-wiki-btn icon-btn"
+            onClick={() => setShowJoinForm(true)}
+            title="Join Wiki"
+          >
+            🤝
+          </button>
         </div>
       </div>
 
@@ -111,9 +80,10 @@ export function WikiList() {
       )}
       
       {showCreateForm && (
-        <div className="create-wiki-form">
-          <form onSubmit={handleCreate}>
-            <h3>Create New Wiki</h3>
+        <div className="create-wiki-modal" onClick={() => setShowCreateForm(false)}>
+          <div className="create-wiki-form" onClick={(e) => e.stopPropagation()}>
+            <form onSubmit={handleCreate}>
+              <h3>Create New Wiki</h3>
             <div className="form-group">
               <label htmlFor="wiki-name">Name</label>
               <input
@@ -151,6 +121,7 @@ export function WikiList() {
               <button type="button" onClick={() => setShowCreateForm(false)}>Cancel</button>
             </div>
           </form>
+          </div>
         </div>
       )}
 
@@ -213,12 +184,14 @@ export function WikiList() {
           wikis.map((wiki) => (
             <div 
               key={wiki.id} 
-              className="wiki-card" 
+              className="wiki-item" 
               onClick={() => selectWiki(wiki)}
             >
-              <h3>{wiki.name}</h3>
-              <p>{wiki.description}</p>
-              <div className="wiki-meta">
+              <div className="wiki-item-primary">
+                <h3 className="wiki-name">{wiki.name}</h3>
+                <span className="wiki-owner">{wiki.created_by}</span>
+              </div>
+              <div className="wiki-item-secondary">
                 <span className="wiki-badge">{wiki.is_public ? 'Public' : 'Private'}</span>
                 <span className="wiki-members">
                   {Object.keys(wiki.members).length} members

@@ -2,13 +2,21 @@ import React from 'react';
 import { useWikiStore } from '../store/wikiStore';
 import './PageList.css';
 
-export function PageList() {
+interface PageListProps {
+  onPageSelect?: (path: string) => void;
+}
+
+export function PageList({ onPageSelect }: PageListProps) {
   const { pages, currentWiki, currentPage, loadPage } = useWikiStore();
 
   if (!currentWiki) return null;
 
   const handlePageClick = (path: string) => {
-    loadPage(currentWiki.id, path);
+    if (onPageSelect) {
+      onPageSelect(path);
+    } else {
+      loadPage(currentWiki.id, path);
+    }
   };
 
   return (

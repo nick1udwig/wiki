@@ -4,8 +4,8 @@ import "./App.css";
 import { WikiList } from "./components/WikiList";
 import { WikiPage } from "./components/WikiPage";
 import { InviteCenter } from "./components/InviteCenter";
+import { GlobalSearch } from "./components/GlobalSearch";
 import { useWikiStore } from "./store/wikiStore";
-import { useTheme } from "./context/ThemeContext";
 
 const BASE_URL = import.meta.env.BASE_URL;
 if (window.our) window.our.process = BASE_URL?.replace("/", "");
@@ -19,7 +19,6 @@ const WEBSOCKET_URL = import.meta.env.DEV
 
 function App() {
   const { currentWiki } = useWikiStore();
-  const { isDarkMode, toggleTheme } = useTheme();
   const [nodeConnected, setNodeConnected] = useState(true);
   const [api, setApi] = useState<HyperwareClientApi | undefined>();
   const [showInviteCenter, setShowInviteCenter] = useState(false);
@@ -55,29 +54,13 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Hyperware Wiki</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <button 
-            onClick={toggleTheme}
-            style={{ 
-              padding: '0.5rem',
-              fontSize: '1.2rem',
-              background: 'transparent',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px',
-              cursor: 'pointer'
-            }}
-            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {isDarkMode ? '☀️' : '🌙'}
-          </button>
-          <div 
-            className="node-info clickable"
-            onClick={() => setShowInviteCenter(!showInviteCenter)}
-            title="Click to view invites"
-          >
-            Node: <strong>{window.our?.node || "Not connected"}</strong>
-          </div>
+        <GlobalSearch />
+        <div 
+          className="node-info clickable"
+          onClick={() => setShowInviteCenter(!showInviteCenter)}
+          title="Click to view invites"
+        >
+          Node: <strong>{window.our?.node || "Not connected"}</strong>
         </div>
       </header>
       
