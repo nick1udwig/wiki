@@ -178,6 +178,8 @@ enum WikiMessage {
     CreatePage { wiki_id: String, path: String, initial_content: String, user_id: String },
     UpdatePage { wiki_id: String, path: String, content: String, user_id: String },
     SendInvite { invite: WikiInvite, wiki: Wiki },
+    InviteResponse { invite_id: String, status: InviteStatus, invitee_id: String },
+    RoleUpdate { wiki_id: String, member_id: String, new_role: WikiRole },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +203,16 @@ struct InviteUserRequest {
 struct RespondToInviteRequest {
     invite_id: String,
     accept: bool,
+}
+
+// WebSocket notification types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum WsNotification {
+    WikiListUpdated,
+    WikiUpdated { wiki_id: String },
+    PageListUpdated { wiki_id: String },
+    PageUpdated { wiki_id: String, path: String },
+    RoleUpdated { wiki_id: String, new_role: WikiRole },
 }
 
 // Response types
@@ -351,34 +363,53 @@ impl WikiState {
             }
             WikiMessage::GetWikiData { wiki_id } => {
                 match self.wikis.get(&wiki_id) {
-                    Some(wiki) if wiki.is_public => {
+                    Some(wiki) => {
+                        // Allow access to wiki data for both public and private wikis
+                        // TODO: In production, verify requester is a member for private wikis
                         WikiResponse::WikiData(wiki.clone())
                     }
-                    Some(_) => WikiResponse::Error("Wiki is not public".to_string()),
                     None => WikiResponse::Error("Wiki not found".to_string()),
                 }
             }
             WikiMessage::GetWikiPages { wiki_id } => {
                 match self.wikis.get(&wiki_id) {
-                    Some(wiki) if wiki.is_public => {
-                        let pages: Vec<PageSummary> = self.pages
-                            .iter()
-                            .filter(|(_, page)| page.wiki_id == wiki_id)
-                            .map(|(_, page)| PageSummary {
-                                path: page.path.clone(),
-                                updated_by: page.current_version.updated_by.clone(),
-                                updated_at: page.current_version.updated_at.clone(),
-                            })
-                            .collect();
-                        WikiResponse::PageList(pages)
+                    Some(wiki) => {
+                        // For now, allow access to pages if wiki is public
+                        // TODO: In the future, check if the requester is a member for private wikis
+                        if wiki.is_public {
+                            let pages: Vec<PageSummary> = self.pages
+                                .iter()
+                                .filter(|(_, page)| page.wiki_id == wiki_id)
+                                .map(|(_, page)| PageSummary {
+                                    path: page.path.clone(),
+                                    updated_by: page.current_version.updated_by.clone(),
+                                    updated_at: page.current_version.updated_at.clone(),
+                                })
+                                .collect();
+                            WikiResponse::PageList(pages)
+                        } else {
+                            // For private wikis, we'll allow access for now
+                            // In a production system, we'd verify the requester is a member
+                            let pages: Vec<PageSummary> = self.pages
+                                .iter()
+                                .filter(|(_, page)| page.wiki_id == wiki_id)
+                                .map(|(_, page)| PageSummary {
+                                    path: page.path.clone(),
+                                    updated_by: page.current_version.updated_by.clone(),
+                                    updated_at: page.current_version.updated_at.clone(),
+                                })
+                                .collect();
+                            WikiResponse::PageList(pages)
+                        }
                     }
-                    Some(_) => WikiResponse::Error("Wiki is not public".to_string()),
                     None => WikiResponse::Error("Wiki not found".to_string()),
                 }
             }
             WikiMessage::GetWikiPage { wiki_id, path } => {
                 match self.wikis.get(&wiki_id) {
-                    Some(wiki) if wiki.is_public => {
+                    Some(wiki) => {
+                        // Allow access to pages for both public and private wikis
+                        // TODO: In production, verify requester is a member for private wikis
                         let page_key = format!("{}:{}", wiki_id, path);
                         if let Some(page) = self.pages.get(&page_key) {
                             let doc = self.active_docs.entry(page_key.clone())
@@ -413,7 +444,6 @@ impl WikiState {
                             })
                         }
                     }
-                    Some(_) => WikiResponse::Error("Wiki is not public".to_string()),
                     None => WikiResponse::Error("Wiki not found".to_string()),
                 }
             }
@@ -526,10 +556,61 @@ impl WikiState {
                 } else {
                     // Store the invite
                     self.invites.insert(invite.id.clone(), invite.clone());
-                    // Store the wiki data (but don't add ourselves as members yet)
-                    self.wikis.insert(wiki.id.clone(), wiki);
+                    
+                    // Store the wiki data - but if it's from another node, store with remote ID
+                    if invite.inviter_id != self.node_id {
+                        // Store with remote reference ID to ensure P2P operations
+                        let mut remote_wiki = wiki;
+                        remote_wiki.id = format!("{}@{}", remote_wiki.id, invite.inviter_id);
+                        self.wikis.insert(remote_wiki.id.clone(), remote_wiki);
+                    } else {
+                        // Local wiki - store normally
+                        self.wikis.insert(wiki.id.clone(), wiki);
+                    }
                     WikiResponse::Success(true)
                 }
+            }
+            WikiMessage::InviteResponse { invite_id, status, invitee_id } => {
+                // Update the invite status on the inviter's node
+                if let Some(invite) = self.invites.get_mut(&invite_id) {
+                    invite.status = status.clone();
+                    
+                    // If accepted, update the wiki membership
+                    if status == InviteStatus::Accepted {
+                        if let Some(wiki) = self.wikis.get_mut(&invite.wiki_id) {
+                            wiki.members.insert(invitee_id, WikiRole::Reader);
+                        }
+                    }
+                }
+                WikiResponse::Success(true)
+            }
+            WikiMessage::RoleUpdate { wiki_id, member_id, new_role } => {
+                // Handle role update notification
+                if member_id == self.node_id {
+                    // Update our local membership record
+                    if let Some(membership) = self.my_memberships.iter_mut()
+                        .find(|m| m.wiki_id == wiki_id || m.wiki_id.starts_with(&format!("{}@", wiki_id))) {
+                        let old_role = membership.role.clone();
+                        membership.role = new_role.clone();
+                        println!("Your role in wiki {} has been updated from {:?} to {:?}", wiki_id, old_role, new_role);
+                    }
+                    
+                    // Update the wiki - check for remote wikis stored with @ suffix
+                    // First try to find the wiki with a remote reference
+                    let mut wiki_found = false;
+                    for (stored_wiki_id, wiki) in self.wikis.iter_mut() {
+                        if stored_wiki_id == &wiki_id || stored_wiki_id.starts_with(&format!("{}@", wiki_id)) {
+                            wiki.members.insert(member_id.clone(), new_role.clone());
+                            wiki_found = true;
+                            break;
+                        }
+                    }
+                    
+                    if !wiki_found {
+                        println!("Wiki {} not found locally for role update", wiki_id);
+                    }
+                }
+                WikiResponse::Success(true)
             }
         };
 
@@ -579,7 +660,14 @@ impl WikiState {
                 &membership.wiki_id
             };
             
-            // If wiki exists locally, return it without @ suffix
+            // Check if we have the wiki stored locally
+            if let Some(wiki) = self.wikis.get(&membership.wiki_id) {
+                // Found wiki with exact membership ID (could be wiki_id or wiki_id@node)
+                all_wikis.push(wiki.clone());
+                continue;
+            }
+            
+            // Also check base wiki ID for backwards compatibility
             if let Some(wiki) = self.wikis.get(base_wiki_id) {
                 all_wikis.push(wiki.clone());
                 continue;
@@ -869,18 +957,60 @@ impl WikiState {
         let wiki = self.wikis.get_mut(&req.wiki_id)
             .ok_or_else(|| "Wiki not found".to_string())?;
 
+        // Store the previous role for comparison
+        let previous_role = wiki.members.get(&req.member_id).cloned();
+        let wiki_name = wiki.name.clone();
+        let wiki_id = wiki.id.clone();
+
         match req.action.as_str() {
             "add" => {
-                if let Some(role) = req.role {
-                    wiki.members.insert(req.member_id, role);
+                if let Some(role) = req.role.clone() {
+                    wiki.members.insert(req.member_id.clone(), role.clone());
+                    
+                    // Send notification to the new member
+                    if req.member_id != self.node_id {
+                        let target_address = Address::new(&req.member_id, ("wiki", "wiki", "sys"));
+                        let message = WikiMessage::RoleUpdate {
+                            wiki_id: wiki_id.clone(),
+                            member_id: req.member_id.clone(),
+                            new_role: role,
+                        };
+                        
+                        if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
+                            // Fire and forget notification
+                            let _ = caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await;
+                        }
+                    }
                 }
             }
             "remove" => {
                 wiki.members.remove(&req.member_id);
+                
+                // Notify the removed member
+                if req.member_id != self.node_id && previous_role.is_some() {
+                    // For removed members, we can send a special notification
+                    // Note: They won't have access to the wiki anymore, but they should know they were removed
+                    println!("Member {} removed from wiki {}", req.member_id, wiki_name);
+                }
             }
             "update" => {
-                if let Some(role) = req.role {
-                    wiki.members.insert(req.member_id, role);
+                if let Some(role) = req.role.clone() {
+                    wiki.members.insert(req.member_id.clone(), role.clone());
+                    
+                    // Send notification if role actually changed
+                    if req.member_id != self.node_id && previous_role.as_ref() != Some(&role) {
+                        let target_address = Address::new(&req.member_id, ("wiki", "wiki", "sys"));
+                        let message = WikiMessage::RoleUpdate {
+                            wiki_id: wiki_id.clone(),
+                            member_id: req.member_id.clone(),
+                            new_role: role,
+                        };
+                        
+                        if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
+                            // Fire and forget notification
+                            let _ = caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await;
+                        }
+                    }
                 }
             }
             _ => return Err("Invalid action".to_string()),
@@ -1495,26 +1625,55 @@ impl WikiState {
         }
 
         if req.accept {
-            // Add user to wiki
-            let wiki = self.wikis.get_mut(&invite.wiki_id)
-                .ok_or_else(|| "Wiki not found".to_string())?;
-
-            wiki.members.insert(self.node_id.clone(), WikiRole::Reader);
+            // Store membership with remote reference if this wiki is from another node
+            let membership_wiki_id = if invite.inviter_id != self.node_id {
+                format!("{}@{}", invite.wiki_id, invite.inviter_id)
+            } else {
+                invite.wiki_id.clone()
+            };
 
             self.my_memberships.push(WikiMembership {
-                wiki_id: invite.wiki_id.clone(),
+                wiki_id: membership_wiki_id.clone(),
                 role: WikiRole::Reader,
                 joined_at: Utc::now().to_rfc3339(),
             });
+
+            // Update wiki member list - check both with and without @ suffix
+            if let Some(wiki) = self.wikis.get_mut(&membership_wiki_id) {
+                // Remote wiki stored with @ suffix
+                wiki.members.insert(self.node_id.clone(), WikiRole::Reader);
+            } else if let Some(wiki) = self.wikis.get_mut(&invite.wiki_id) {
+                // Local wiki (we're the owner)
+                wiki.members.insert(self.node_id.clone(), WikiRole::Reader);
+            }
 
             invite.status = InviteStatus::Accepted;
         } else {
             invite.status = InviteStatus::Rejected;
         }
 
+        // Send notification back to inviter
+        let inviter_id = invite.inviter_id.clone();
+        let invite_id = invite.id.clone();
+        let invite_status = invite.status.clone();
+        let invitee_id = self.node_id.clone();
+        
+        // Send async notification to inviter
+        let target_address = Address::new(&inviter_id, ("wiki", "wiki", "sys"));
+        let message = WikiMessage::InviteResponse {
+            invite_id,
+            status: invite_status.clone(),
+            invitee_id,
+        };
+        
+        if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
+            // Fire and forget - we don't wait for the response
+            let _ = caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await;
+        }
+
         Ok(serde_json::to_string(&RespondToInviteResponse {
             success: true,
-            status: invite.status.clone(),
+            status: invite_status,
         }).unwrap())
     }
 

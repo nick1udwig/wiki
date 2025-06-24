@@ -8,11 +8,12 @@ import { wikiApi, WikiRole } from '../api/wiki';
 import './WikiPage.css';
 
 export function WikiPage() {
-  const { currentWiki, currentPage, selectWiki, createPage } = useWikiStore();
+  const { currentWiki, currentPage, selectWiki, createPage, loadPages, loadWiki } = useWikiStore();
   const [showCreatePage, setShowCreatePage] = useState(false);
   const [newPagePath, setNewPagePath] = useState('');
   const [showAdminView, setShowAdminView] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+
 
   if (!currentWiki) {
     return null;
@@ -25,6 +26,22 @@ export function WikiPage() {
     await createPage(newPagePath, `# ${newPagePath}\n\nStart writing your content here...`);
     setShowCreatePage(false);
     setNewPagePath('');
+  };
+
+  const handleToggleEditMode = async () => {
+    // Refresh wiki data to get latest role before toggling
+    if (currentWiki) {
+      await loadWiki(currentWiki.id);
+    }
+    setIsEditMode(!isEditMode);
+  };
+
+  const handleOpenAdminView = async () => {
+    // Refresh wiki data to get latest members before opening
+    if (currentWiki) {
+      await loadWiki(currentWiki.id);
+    }
+    setShowAdminView(true);
   };
 
 
@@ -60,7 +77,7 @@ export function WikiPage() {
           {canEdit && currentPage && (
             <button
               className="mode-toggle-btn"
-              onClick={() => setIsEditMode(!isEditMode)}
+              onClick={handleToggleEditMode}
             >
               {isEditMode ? '👁 View' : '✏️ Edit'}
             </button>
@@ -68,7 +85,7 @@ export function WikiPage() {
           {isAdmin && !isRemoteWiki && (
             <button
               className="admin-btn"
-              onClick={() => setShowAdminView(true)}
+              onClick={handleOpenAdminView}
             >
               Admin Panel
             </button>

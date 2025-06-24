@@ -20,7 +20,8 @@ interface WikiStore {
   
   // Actions
   loadWikis: () => Promise<void>;
-  selectWiki: (wiki: Wiki | null) => void;
+  selectWiki: (wiki: Wiki | null) => Promise<void>;
+  loadWiki: (wiki_id: string) => Promise<void>;
   loadPage: (wiki_id: string, path: string) => Promise<void>;
   savePage: (content: string) => Promise<void>;
   createWiki: (name: string, description: string, is_public: boolean) => Promise<void>;
@@ -51,10 +52,32 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
     }
   },
 
-  selectWiki: (wiki) => {
+  selectWiki: async (wiki) => {
     set({ currentWiki: wiki, currentPage: null, pages: [] });
     if (wiki) {
+      // Refresh wiki data to get latest members/roles
+      try {
+        const freshWiki = await wikiApi.getWiki(wiki.id);
+        set({ currentWiki: freshWiki });
+      } catch (error) {
+        // If refresh fails, continue with cached data
+        console.error('Failed to refresh wiki data:', error);
+      }
       get().loadPages(wiki.id);
+    }
+  },
+
+  loadWiki: async (wiki_id: string) => {
+    try {
+      const wiki = await wikiApi.getWiki(wiki_id);
+      const { currentWiki } = get();
+      // Only update if this is still the current wiki
+      if (currentWiki && currentWiki.id === wiki_id) {
+        set({ currentWiki: wiki });
+      }
+    } catch (error: any) {
+      // Silently fail for background refresh
+      console.error('Failed to refresh wiki:', error);
     }
   },
 
@@ -85,10 +108,9 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       await wikiApi.updatePage(currentWiki.id, currentPage.path, content);
-      set({ 
-        isLoading: false,
-        currentPage: { ...currentPage, content }
-      });
+      // Reload the page to get the latest version
+      await get().loadPage(currentWiki.id, currentPage.path);
+      set({ isLoading: false });
     } catch (error: any) {
       set({ error: getErrorMessage(error, 'Failed to save page'), isLoading: false });
     }
@@ -140,6 +162,7 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
   inviteUser: async (wiki_id: string, invitee_id: string) => {
     try {
       await wikiApi.inviteUser(wiki_id, invitee_id);
+      // No need to refresh data as invites are separate from wiki data
     } catch (error: any) {
       throw new Error(getErrorMessage(error, 'Failed to invite user'));
     }

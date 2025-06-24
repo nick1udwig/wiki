@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { wikiApi, WikiInvite } from '../api/wiki';
+import { useWikiStore } from '../store/wikiStore';
 import './InviteCenter.css';
 
 export function InviteCenter() {
   const [invites, setInvites] = useState<WikiInvite[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { loadWikis } = useWikiStore();
 
   const loadInvites = async () => {
     setIsLoading(true);
@@ -29,6 +31,10 @@ export function InviteCenter() {
       await wikiApi.respondToInvite(inviteId, accept);
       // Reload invites to update the list
       await loadInvites();
+      // If accepted, reload wikis to show the new wiki
+      if (accept) {
+        await loadWikis();
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to respond to invite');
     }
