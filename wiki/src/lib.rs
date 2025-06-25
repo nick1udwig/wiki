@@ -8,6 +8,8 @@ use yrs::updates::decoder::Decode;
 use uuid::Uuid;
 use chrono::Utc;
 
+const ICON: &str = include_str!("./icon");
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 enum WikiRole {
     Reader,
@@ -307,6 +309,8 @@ impl WikiState {
                 self.invites = invites;
             }
         }
+
+        hyperware_process_lib::homepage::add_to_homepage("wiki", Some(ICON), Some(""), None);
 
         println!("Wiki node initialized with node ID: {}", self.node_id);
         println!("Full address: {}", our_address);
@@ -640,7 +644,7 @@ impl WikiState {
 
                             // Search in path and content
                             let path_matches = page.path.to_lowercase().contains(&query_lower);
-                            
+
                             // Decode CRDT content to get actual text
                             let content = if let Some(doc) = self.active_docs.get(page_key) {
                                 // Use existing doc
@@ -660,7 +664,7 @@ impl WikiState {
                                 let content_string = text.get_string(&doc.transact());
                                 content_string
                             };
-                            
+
                             let content_lower = content.to_lowercase();
                             let content_matches = content_lower.contains(&query_lower);
 
@@ -1160,7 +1164,7 @@ impl WikiState {
 
         // Local wiki handling
         self.check_permission(&req.wiki_id, WikiRole::Writer)?;
-        
+
         // Extract title from the initial content
         let title = Self::extract_title_from_markdown(&req.initial_content);
         let page_key = format!("{}:{}", req.wiki_id, title);
@@ -1546,7 +1550,7 @@ impl WikiState {
             wiki_id: req.wiki_id,
             query: req.query,
         };
-        
+
         // Process the message directly instead of calling handle_wiki_message
         match message {
             WikiMessage::SearchPages { wiki_id, query } => {
@@ -1562,7 +1566,7 @@ impl WikiState {
 
                             // Search in path and content
                             let path_matches = page.path.to_lowercase().contains(&query_lower);
-                            
+
                             // Decode CRDT content to get actual text
                             let content = if let Some(doc) = self.active_docs.get(page_key) {
                                 // Use existing doc
@@ -1582,7 +1586,7 @@ impl WikiState {
                                 let content_string = text.get_string(&doc.transact());
                                 content_string
                             };
-                            
+
                             let content_lower = content.to_lowercase();
                             let content_matches = content_lower.contains(&query_lower);
 
@@ -1625,7 +1629,7 @@ impl WikiState {
             _ => Err("Invalid message type".to_string()),
         }
     }
-    
+
     #[http]
     async fn search_pages_disabled(&mut self, body: String) -> Result<String, String> {
         let req: SearchRequest = serde_json::from_str(&body)
@@ -1679,7 +1683,7 @@ impl WikiState {
 
             // Search in path and content
             let path_matches = page.path.to_lowercase().contains(&query_lower);
-            
+
             // Decode CRDT content to get actual text
             let content = if let Some(doc) = self.active_docs.get(page_key) {
                 // Use existing doc
@@ -1699,7 +1703,7 @@ impl WikiState {
                 let txn = doc.transact();
                 text.get_string(&txn)
             };
-            
+
             let content_lower = content.to_lowercase();
             let content_matches = content_lower.contains(&query_lower);
 
@@ -2119,7 +2123,7 @@ impl WikiState {
 
                 // Search in path and content
                 let path_matches = page.path.to_lowercase().contains(&query_lower);
-                
+
                 // Decode CRDT content to get actual text
                 let content = if let Some(doc) = self.active_docs.get(page_key) {
                     // Use existing doc
@@ -2139,7 +2143,7 @@ impl WikiState {
                     let content_string = text.get_string(&doc.transact());
                     content_string
                 };
-                
+
                 let content_lower = content.to_lowercase();
                 let content_matches = content_lower.contains(&query_lower);
 
@@ -2193,20 +2197,20 @@ impl WikiState {
             if !membership.wiki_id.contains('@') {
                 continue;
             }
-            
+
             // Parse remote wiki reference
             let parts: Vec<&str> = membership.wiki_id.split('@').collect();
             if parts.len() == 2 {
                 let wiki_id = parts[0];
                 let node_id = parts[1];
-                
+
                 // Send search request to remote node
                 let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
                 let message = WikiMessage::SearchPages {
                     wiki_id: wiki_id.to_string(),
                     query: req.query.clone(),
                 };
-                
+
                 if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
                     match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                         Ok(Ok(response_bytes)) => {
@@ -2218,7 +2222,7 @@ impl WikiState {
                                     } else {
                                         format!("Remote Wiki on {}", node_id)
                                     };
-                                    
+
                                     // Add remote results to global results
                                     for result in results {
                                         all_results.push(GlobalSearchResult {
@@ -2241,7 +2245,7 @@ impl WikiState {
 
         Ok(serde_json::to_string(&all_results).unwrap())
     }
-    
+
     #[http]
     async fn search_all_wikis_disabled(&mut self, body: String) -> Result<String, String> {
         #[derive(Deserialize)]
@@ -2285,10 +2289,10 @@ impl WikiState {
 
                 // Search in path and content
                 let path_matches = page.path.to_lowercase().contains(&query_lower);
-                
+
                 // Get page key
                 let page_key_str = format!("{}:{}", wiki_id, page.path);
-                
+
                 // Decode CRDT content to get actual text
                 let content = if let Some(doc) = self.active_docs.get(&page_key_str) {
                     // Use existing doc
@@ -2307,7 +2311,7 @@ impl WikiState {
                     let content_string = text.get_string(&doc.transact());
                     content_string
                 };
-                
+
                 let content_lower = content.to_lowercase();
                 let content_matches = content_lower.contains(&query_lower);
 
@@ -2351,20 +2355,20 @@ impl WikiState {
             if !membership.wiki_id.contains('@') {
                 continue;
             }
-            
+
             // Parse remote wiki reference
             let parts: Vec<&str> = membership.wiki_id.split('@').collect();
             if parts.len() == 2 {
                 let wiki_id = parts[0];
                 let node_id = parts[1];
-                
+
                 // Send search request to remote node
                 let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
                 let message = WikiMessage::SearchPages {
                     wiki_id: wiki_id.to_string(),
                     query: req.query.clone(),
                 };
-                
+
                 if let Ok(message_body) = serde_json::to_string(&message).map(|s| s.into_bytes()) {
                     match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
                         Ok(Ok(response_bytes)) => {
@@ -2376,7 +2380,7 @@ impl WikiState {
                                     } else {
                                         format!("Remote Wiki on {}", node_id)
                                     };
-                                    
+
                                     // Add remote results to global results
                                     for result in results {
                                         all_results.push(GlobalSearchResult {
@@ -2423,11 +2427,11 @@ impl WikiState {
         let message = WikiMessage::GetWikiData {
             wiki_id: wiki_id.to_string(),
         };
-        
+
         let message_body = serde_json::to_string(&message)
             .map_err(|e| format!("Failed to serialize message: {}", e))?
             .into_bytes();
-        
+
         match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
             Ok(Ok(response_bytes)) => {
                 let response_str = String::from_utf8(response_bytes)
@@ -2440,7 +2444,7 @@ impl WikiState {
             _ => Err("Failed to contact remote node".to_string()),
         }
     }
-    
+
     fn check_permission(&self, wiki_id: &str, required_role: WikiRole) -> Result<(), String> {
         // For remote wikis (format: wiki_id@node_id), check our membership
         if wiki_id.contains('@') {
