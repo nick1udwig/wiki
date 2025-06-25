@@ -1,0 +1,367 @@
+.wiki-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.wiki-header {
+  background: var(--bg-secondary);
+  padding: 1rem 2rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.back-button {
+  background: none;
+  color: var(--link-color);
+  padding: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.back-button:hover {
+  background: var(--bg-tertiary);
+}
+
+.wiki-header h1 {
+  margin: 0;
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.wiki-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.wiki-sidebar {
+  width: 250px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
+  transition: transform 0.3s ease, width 0.3s ease;
+  position: relative;
+}
+
+.wiki-sidebar.collapsed {
+  width: 0;
+  transform: translateX(-250px);
+}
+
+.sidebar-toggle {
+  position: fixed;
+  left: 250px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0 4px 4px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+  z-index: 10;
+}
+
+.wiki-sidebar.collapsed ~ .sidebar-toggle {
+  left: 0;
+}
+
+.sidebar-toggle:hover {
+  background: var(--bg-tertiary);
+}
+
+.sidebar-header {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sidebar-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.sidebar-search {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.create-page-btn {
+  background: none;
+  color: #27ae60;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.dark .create-page-btn {
+  color: #4ade80;
+}
+
+.create-page-form {
+  padding: 1rem;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.create-page-form input {
+  margin-bottom: 0.5rem;
+}
+
+.wiki-main {
+  flex: 1;
+  background: var(--bg-primary);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.empty-page {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+}
+
+.wiki-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.invite-btn {
+  background-color: #9b59b6;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.invite-btn:hover {
+  background-color: #8e44ad;
+}
+
+.invite-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.invite-modal-content {
+  background: var(--bg-secondary);
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  max-width: 400px;
+  width: 90%;
+  border: 1px solid var(--border-color);
+}
+
+.invite-modal-content h3 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  color: var(--text-primary);
+}
+
+.invite-modal-content .form-group {
+  margin-bottom: 1rem;
+}
+
+.invite-modal-content .form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.invite-modal-content input {
+  width: 100%;
+  padding: 0.5rem;
+  font-size: 1rem;
+}
+
+/* Admin Button */
+.admin-btn {
+  background: #9b59b6;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.admin-btn:hover {
+  background: #8e44ad;
+}
+
+.wiki-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.wiki-badge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+
+/* Role Badge */
+.role-badge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.role-superadmin {
+  background: #f39c12;
+  color: white;
+}
+
+.role-admin {
+  background: #e74c3c;
+  color: white;
+}
+
+.role-writer {
+  background: #3498db;
+  color: white;
+}
+
+.role-reader {
+  background: #95a5a6;
+  color: white;
+}
+
+/* Mode Toggle Button */
+.mode-toggle-btn {
+  background: #2ecc71;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.mode-toggle-btn:hover {
+  background: #27ae60;
+}
+
+/* Mobile responsive styles */
+@media (max-width: 768px) {
+  .wiki-header {
+    padding: 1rem;
+    flex-wrap: wrap;
+  }
+  
+  .wiki-header h1 {
+    font-size: 1.2rem;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  
+  .wiki-info {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  
+  .wiki-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 100;
+    box-shadow: 2px 0 8px rgba(0,0,0,0.2);
+  }
+  
+  .wiki-sidebar.collapsed {
+    transform: translateX(-100%);
+  }
+  
+  .sidebar-toggle {
+    z-index: 101;
+  }
+  
+  .wiki-sidebar:not(.collapsed) ~ .sidebar-toggle {
+    left: 250px;
+  }
+  
+  .wiki-sidebar.collapsed ~ .sidebar-toggle {
+    left: 0;
+  }
+  
+  .wiki-main {
+    margin-left: 0;
+  }
+  
+  .wiki-content {
+    position: relative;
+  }
+  
+  .admin-btn,
+  .mode-toggle-btn,
+  .invite-btn {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+  }
+  
+  .back-button {
+    padding: 0.4rem;
+    font-size: 0.85rem;
+  }
+  
+  .create-page-btn {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+  }
+  
+  .invite-modal-content {
+    padding: 1.5rem;
+    width: 95%;
+  }
+}
+
+/* Overlay for mobile when sidebar is open */
+@media (max-width: 768px) {
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99;
+  }
+  
+  .sidebar-overlay.active {
+    display: block;
+  }
+}

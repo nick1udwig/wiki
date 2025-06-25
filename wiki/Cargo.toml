@@ -1,20 +1,24 @@
 [dependencies]
 anyhow = "1.0.97"
+base64 = "0.22"
+chrono = "0.4"
 process_macros = "0.1"
-rmp-serde = "1.1.2"
+rmp-serde = "1.3.0"
 serde_json = "1.0"
+uuid = { version = "1.11.0", features = ["v4", "serde"] }
 wit-bindgen = "0.36.0"
-uuid = { version = "1.7.0", features = ["v4", "serde"] }
-yrs = "0.23.1"
-chrono = { version = "0.4", features = ["serde"] }
+yrs = "0.21"
+
+[dependencies.caller-utils]
+path = "../target/caller-utils"
 
 [dependencies.hyperprocess_macro]
 git = "https://github.com/hyperware-ai/hyperprocess-macro"
-rev = "b6ad495"
+rev = "4c944b2"
 
 [dependencies.hyperware_app_common]
 git = "https://github.com/hyperware-ai/hyperprocess-macro"
-rev = "b6ad495"
+rev = "4c944b2"
 
 [dependencies.serde]
 features = ["derive"]

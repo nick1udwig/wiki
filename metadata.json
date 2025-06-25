@@ -1,18 +1,18 @@
 {
   "name": "wiki",
-  "description": "decentralized CRDT-mirrored wiki",
+  "description": "Decentralized wiki with P2P synchronization",
   "image": "",
   "properties": {
     "package_name": "wiki",
-    "current_version": "1.0.0",
-    "publisher": "nick.hypr",
+    "current_version": "0.1.0",
+    "publisher": "sys",
     "mirrors": [],
     "code_hashes": {
-      "1.0.0": ""
+      "0.1.0": ""
     },
     "wit_version": 1,
     "dependencies": []
   },
-  "external_url": "https://github.com/nick1udwig/wiki",
+  "external_url": "",
   "animation_url": ""
 }
