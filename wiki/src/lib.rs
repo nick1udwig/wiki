@@ -1,5 +1,6 @@
+use hyperware_app_common::SaveOptions;
 use hyperprocess_macro::hyperprocess;
-use hyperware_process_lib::{get_state, our, println, Address};
+use hyperware_process_lib::{our, println, Address};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use yrs::{Doc, GetString, Text, Transact, ReadTxn};
@@ -91,7 +92,7 @@ enum InviteStatus {
     Expired,
 }
 
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct WikiState {
     node_id: String, // Our node ID (e.g., "alice.os"), NOT the full address
     wikis: HashMap<String, Wiki>,
@@ -470,6 +471,21 @@ impl WikiState {
     }
 }
 
+impl Default for WikiState {
+    fn default() -> Self {
+        WikiState {
+            node_id: our().node.to_string(),
+            wikis: HashMap::new(),
+            pages: HashMap::new(),
+            page_histories: HashMap::new(),
+            deleted_pages: HashMap::new(),
+            my_memberships: Vec::new(),
+            invites: HashMap::new(),
+            active_docs: HashMap::new(),
+        }
+    }
+}
+
 #[hyperprocess(
     name = "wiki",
     ui = Some(HttpBindingConfig::default()),
@@ -483,23 +499,9 @@ impl WikiState {
 impl WikiState {
     #[init]
     async fn init(&mut self) {
-        // Extract just the node part from the full address
-        let our_address = our();
-        self.node_id = our_address.node().to_string();
-
-        if let Some(ref state) = get_state() {
-            if let Ok(WikiState { wikis, pages, my_memberships, invites, .. }) = rmp_serde::from_slice(state) {
-                self.wikis = wikis;
-                self.pages = pages;
-                self.my_memberships = my_memberships;
-                self.invites = invites;
-            }
-        }
-
         hyperware_process_lib::homepage::add_to_homepage("wiki", Some(ICON), Some(""), None);
 
-        println!("Wiki node initialized with node ID: {}", self.node_id);
-        println!("Full address: {}", our_address);
+        println!("begin");
     }
 
     #[remote]
