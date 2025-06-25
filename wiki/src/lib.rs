@@ -9,6 +9,7 @@ use uuid::Uuid;
 use chrono::Utc;
 
 const ICON: &str = include_str!("./icon");
+const WIKI_PROCESS_ID: (&str, &str, &str) = ("wiki", "wiki", "nick.hypr");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 enum WikiRole {
@@ -411,12 +412,12 @@ impl WikiState {
         let lines1: Vec<&str> = text1.lines().collect();
         let lines2: Vec<&str> = text2.lines().collect();
         let mut diff_lines = Vec::new();
-        
+
         // Simple line-by-line diff algorithm
         let _max_len = lines1.len().max(lines2.len());
         let mut i = 0;
         let mut j = 0;
-        
+
         while i < lines1.len() || j < lines2.len() {
             if i >= lines1.len() {
                 // All remaining lines in text2 are additions
@@ -464,7 +465,7 @@ impl WikiState {
                 j += 1;
             }
         }
-        
+
         diff_lines
     }
 }
@@ -477,7 +478,7 @@ impl WikiState {
         Binding::Ws { path: "/ws", config: WsBindingConfig::default() }
     ],
     save_config = SaveOptions::EveryMessage,
-    wit_world = "wiki-sys-v0"
+    wit_world = "wiki-nick-hypr-v0"
 )]
 impl WikiState {
     #[init]
@@ -813,13 +814,13 @@ impl WikiState {
                                             deleted_by: user_id.clone(),
                                             history,
                                         };
-                                        
+
                                         self.deleted_pages.insert(deleted_key, deleted_page);
                                     }
-                                    
+
                                     // Remove from active docs
                                     self.active_docs.remove(&page_key);
-                                    
+
                                     WikiResponse::Success(true)
                                 } else {
                                     WikiResponse::Error("Page not found".to_string())
@@ -852,14 +853,14 @@ impl WikiState {
                                     }
                                 })
                                 .collect();
-                            
+
                             let decoded_history = DecodedPageHistory {
                                 path: history.path.clone(),
                                 wiki_id: history.wiki_id.clone(),
                                 versions: decoded_versions,
                                 current_version_id: history.current_version_id.clone(),
                             };
-                            
+
                             WikiResponse::DecodedPageHistory(decoded_history)
                         } else {
                             WikiResponse::Error("Page history not found".to_string())
@@ -880,15 +881,15 @@ impl WikiState {
                                         self.deleted_pages.insert(deleted_key, deleted_page);
                                         return Ok(serde_json::to_vec(&WikiResponse::Error("Deleted page key mismatch".to_string())).unwrap());
                                     }
-                                    
+
                                     let page_key = format!("{}:{}", wiki_id, path);
-                                    
+
                                     // Check if page already exists
                                     if self.pages.contains_key(&page_key) {
                                         self.deleted_pages.insert(deleted_key, deleted_page);
                                         return Ok(serde_json::to_vec(&WikiResponse::Error("Page already exists".to_string())).unwrap());
                                     }
-                                    
+
                                     // Restore the page with its latest version
                                     let history = deleted_page.history;
                                     if let Some(latest_version) = history.versions.last() {
@@ -898,10 +899,10 @@ impl WikiState {
                                             current_version: latest_version.clone(),
                                             yrs_doc: latest_version.content.clone(),
                                         };
-                                        
+
                                         self.pages.insert(page_key.clone(), page);
                                         self.page_histories.insert(page_key, history);
-                                        
+
                                         WikiResponse::Success(true)
                                     } else {
                                         WikiResponse::Error("No versions found in deleted page".to_string())
@@ -943,7 +944,7 @@ impl WikiState {
                             // Find the two versions
                             let version1 = history.versions.iter().find(|v| v.version_id == version1_id);
                             let version2 = history.versions.iter().find(|v| v.version_id == version2_id);
-                            
+
                             match (version1, version2) {
                                 (Some(v1), Some(v2)) => {
                                     // Decode content for both versions
@@ -955,16 +956,16 @@ impl WikiState {
                                         Ok(text) => text,
                                         Err(_) => return Ok(serde_json::to_vec(&WikiResponse::Error("Failed to decode version 2 content".to_string())).unwrap()),
                                     };
-                                    
+
                                     // Calculate diff
                                     let diff_lines = self.calculate_diff(&content1, &content2);
-                                    
+
                                     let version_diff = VersionDiff {
                                         version1_id: version1_id.clone(),
                                         version2_id: version2_id.clone(),
                                         diff_lines,
                                     };
-                                    
+
                                     WikiResponse::VersionDiff(version_diff)
                                 }
                                 _ => WikiResponse::Error("One or both versions not found".to_string()),
@@ -1185,7 +1186,7 @@ impl WikiState {
                     let node_id = parts[1];
 
                     // Try to fetch the actual wiki data from the remote node
-                    let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                    let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                     let message = WikiMessage::GetWikiData {
                         wiki_id: wiki_id.to_string(),
                     };
@@ -1249,7 +1250,7 @@ impl WikiState {
                     let node_id = parts[1];
 
                     // Fetch the actual wiki data from the remote node
-                    let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                    let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                     let message = WikiMessage::GetWikiData {
                         wiki_id: wiki_id.to_string(),
                     };
@@ -1313,7 +1314,7 @@ impl WikiState {
         if let Some(remote_node_id) = &req.node_id {
             if remote_node_id != &self.node_id {
                 // This is a remote wiki - fetch its info first
-                let target_address = Address::new(remote_node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(remote_node_id, WIKI_PROCESS_ID);
 
                 // Create message to get public wiki info
                 let message = WikiMessage::GetPublicWiki {
@@ -1472,7 +1473,7 @@ impl WikiState {
 
                     // Send notification to the new member
                     if req.member_id != self.node_id {
-                        let target_address = Address::new(&req.member_id, ("wiki", "wiki", "sys"));
+                        let target_address = Address::new(&req.member_id, WIKI_PROCESS_ID);
                         let message = WikiMessage::RoleUpdate {
                             wiki_id: wiki_id.clone(),
                             member_id: req.member_id.clone(),
@@ -1502,7 +1503,7 @@ impl WikiState {
 
                     // Send notification if role actually changed
                     if req.member_id != self.node_id && previous_role.as_ref() != Some(&role) {
-                        let target_address = Address::new(&req.member_id, ("wiki", "wiki", "sys"));
+                        let target_address = Address::new(&req.member_id, WIKI_PROCESS_ID);
                         let message = WikiMessage::RoleUpdate {
                             wiki_id: wiki_id.clone(),
                             member_id: req.member_id.clone(),
@@ -1535,7 +1536,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send create page request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::CreatePage {
                     wiki_id: wiki_id.to_string(),
                     path: req.path.clone(),
@@ -1642,7 +1643,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send update page request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::UpdatePage {
                     wiki_id: wiki_id.to_string(),
                     path: req.path.clone(),
@@ -1812,7 +1813,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Fetch page from remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::GetWikiPage {
                     wiki_id: wiki_id.to_string(),
                     path: req.path.clone(),
@@ -1897,7 +1898,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Fetch pages from remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::GetWikiPages {
                     wiki_id: wiki_id.to_string(),
                 };
@@ -1958,7 +1959,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send delete page request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::DeletePage {
                     wiki_id: wiki_id.to_string(),
                     path: req.path.clone(),
@@ -2010,13 +2011,13 @@ impl WikiState {
                     deleted_by: self.node_id.clone(),
                     history,
                 };
-                
+
                 self.deleted_pages.insert(deleted_key, deleted_page);
             }
-            
+
             // Remove from active docs
             self.active_docs.remove(&page_key);
-            
+
             Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap())
         } else {
             Err("Page not found".to_string())
@@ -2042,7 +2043,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send search request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::SearchPages {
                     wiki_id: wiki_id.to_string(),
                     query: req.query.clone(),
@@ -2175,7 +2176,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send get page history request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::GetPageHistory {
                     wiki_id: wiki_id.to_string(),
                     path: req.path.clone(),
@@ -2232,14 +2233,14 @@ impl WikiState {
                     }
                 })
                 .collect();
-            
+
             let decoded_history = DecodedPageHistory {
                 path: history.path.clone(),
                 wiki_id: history.wiki_id.clone(),
                 versions: decoded_versions,
                 current_version_id: history.current_version_id.clone(),
             };
-            
+
             Ok(serde_json::to_string(&decoded_history).unwrap())
         } else {
             Err("Page history not found".to_string())
@@ -2259,7 +2260,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send list deleted pages request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::ListDeletedPages {
                     wiki_id: wiki_id.to_string(),
                 };
@@ -2322,7 +2323,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send restore deleted page request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::RestoreDeletedPage {
                     wiki_id: wiki_id.to_string(),
                     path: req.path.clone(),
@@ -2366,15 +2367,15 @@ impl WikiState {
                 self.deleted_pages.insert(req.deleted_key, deleted_page);
                 return Err("Deleted page key mismatch".to_string());
             }
-            
+
             let page_key = format!("{}:{}", req.wiki_id, req.path);
-            
+
             // Check if page already exists
             if self.pages.contains_key(&page_key) {
                 self.deleted_pages.insert(req.deleted_key, deleted_page);
                 return Err("Page already exists".to_string());
             }
-            
+
             // Restore the page with its latest version
             let history = deleted_page.history;
             if let Some(latest_version) = history.versions.last() {
@@ -2384,10 +2385,10 @@ impl WikiState {
                     current_version: latest_version.clone(),
                     yrs_doc: latest_version.content.clone(),
                 };
-                
+
                 self.pages.insert(page_key.clone(), page);
                 self.page_histories.insert(page_key, history);
-                
+
                 Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap())
             } else {
                 Err("No versions found in deleted page".to_string())
@@ -2410,7 +2411,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send get version diff request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::GetVersionDiff {
                     wiki_id: wiki_id.to_string(),
                     path: req.path.clone(),
@@ -2453,7 +2454,7 @@ impl WikiState {
             // Find the two versions
             let version1 = history.versions.iter().find(|v| v.version_id == req.version1_id);
             let version2 = history.versions.iter().find(|v| v.version_id == req.version2_id);
-            
+
             match (version1, version2) {
                 (Some(v1), Some(v2)) => {
                     // Decode content for both versions
@@ -2461,16 +2462,16 @@ impl WikiState {
                         .map_err(|_| "Failed to decode version 1 content".to_string())?;
                     let content2 = self.decode_yrs_content(&v2.content)
                         .map_err(|_| "Failed to decode version 2 content".to_string())?;
-                    
+
                     // Calculate diff
                     let diff_lines = self.calculate_diff(&content1, &content2);
-                    
+
                     let version_diff = VersionDiff {
                         version1_id: req.version1_id.clone(),
                         version2_id: req.version2_id.clone(),
                         diff_lines,
                     };
-                    
+
                     Ok(serde_json::to_string(&version_diff).unwrap())
                 }
                 _ => Err("One or both versions not found".to_string()),
@@ -2492,7 +2493,7 @@ impl WikiState {
                 let wiki_id = parts[0];
                 let node_id = parts[1];
 
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::SearchPages {
                     wiki_id: wiki_id.to_string(),
                     query: req.query.clone(),
@@ -2623,7 +2624,7 @@ impl WikiState {
         // Try to query the target node for their public wikis
         // The username is expected to be a node ID (e.g., "alice.os")
         // We'll construct the wiki process address from it
-        let target_address = Address::new(&req.username, ("wiki", "wiki", "sys"));
+        let target_address = Address::new(&req.username, WIKI_PROCESS_ID);
 
         println!("Querying node {} for public wikis", target_address);
 
@@ -2784,7 +2785,7 @@ impl WikiState {
         self.invites.insert(invite_id.clone(), invite.clone());
 
         // Send the invite to the invitee via P2P
-        let target_address = Address::new(&req.invitee_id, ("wiki", "wiki", "sys"));
+        let target_address = Address::new(&req.invitee_id, WIKI_PROCESS_ID);
         let message = WikiMessage::SendInvite {
             invite: invite.clone(),
             wiki: wiki.clone(),
@@ -2883,7 +2884,7 @@ impl WikiState {
         let invitee_id = self.node_id.clone();
 
         // Send async notification to inviter
-        let target_address = Address::new(&inviter_id, ("wiki", "wiki", "sys"));
+        let target_address = Address::new(&inviter_id, WIKI_PROCESS_ID);
         let message = WikiMessage::InviteResponse {
             invite_id,
             status: invite_status.clone(),
@@ -3055,7 +3056,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send search request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::SearchPages {
                     wiki_id: wiki_id.to_string(),
                     query: req.query.clone(),
@@ -3213,7 +3214,7 @@ impl WikiState {
                 let node_id = parts[1];
 
                 // Send search request to remote node
-                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let target_address = Address::new(node_id, WIKI_PROCESS_ID);
                 let message = WikiMessage::SearchPages {
                     wiki_id: wiki_id.to_string(),
                     query: req.query.clone(),
@@ -3273,7 +3274,7 @@ impl WikiState {
     }
 
     async fn get_remote_wiki_data(&self, wiki_id: &str, node_id: &str) -> Result<Wiki, String> {
-        let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+        let target_address = Address::new(node_id, WIKI_PROCESS_ID);
         let message = WikiMessage::GetWikiData {
             wiki_id: wiki_id.to_string(),
         };
