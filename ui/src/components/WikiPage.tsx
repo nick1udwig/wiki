@@ -19,8 +19,10 @@ export function WikiPage() {
   }
 
   const handleCreatePage = async () => {
-    // Create a new untitled page
-    await createPage('temp', `# New Note\n\nStart writing your content here...`);
+    // Generate a unique untitled page name
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const uniqueTitle = `Untitled ${timestamp}`;
+    await createPage(uniqueTitle, `# ${uniqueTitle}\n\nStart writing your content here...`);
     
     // Collapse sidebar on mobile after creating page
     if (isMobile) {
