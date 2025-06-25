@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useWikiStore } from '../store/wikiStore';
+import { PageHistory } from './PageHistory';
 import './PageEditor.css';
 
 export function PageEditor() {
-  const { currentPage, currentWiki, savePage, loadPage, isLoading } = useWikiStore();
+  const { currentPage, currentWiki, savePage, loadPage, deletePage, isLoading } = useWikiStore();
   const [content, setContent] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (currentPage) {
@@ -56,6 +59,20 @@ export function PageEditor() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!currentWiki || !currentPage) return;
+    
+    if (confirm(`Are you sure you want to delete "${currentPage.path}"? This page can be restored from the admin panel.`)) {
+      setIsDeleting(true);
+      try {
+        await deletePage(currentWiki.id, currentPage.path);
+      } catch (error) {
+        // Error is already shown by the store
+        setIsDeleting(false);
+      }
+    }
+  };
+
   return (
     <div className="page-editor">
       {!isEditing && (
@@ -96,9 +113,34 @@ export function PageEditor() {
       </div>
       
       <div className="page-meta">
-        <span>Last updated: {new Date(currentPage.updated_at).toLocaleString()}</span>
-        <span>By: {currentPage.updated_by}</span>
+        <span>Last updated by {currentPage.updated_by}</span>
+        <span>{new Date(currentPage.updated_at).toLocaleString()}</span>
+        <div className="page-actions">
+          <button 
+            className="history-btn"
+            onClick={() => setShowHistory(true)}
+            title="View version history"
+          >
+            <span className="history-icon">🕐</span>
+          </button>
+          <button 
+            className="delete-btn"
+            onClick={handleDelete}
+            disabled={isDeleting}
+            title="Delete page"
+          >
+            {isDeleting ? '...' : '🗑️'}
+          </button>
+        </div>
       </div>
+      
+      {showHistory && currentWiki && (
+        <PageHistory
+          wiki_id={currentWiki.id}
+          path={currentPage.path}
+          onClose={() => setShowHistory(false)}
+        />
+      )}
     </div>
   );
 }

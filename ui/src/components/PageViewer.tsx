@@ -1,10 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useWikiStore } from '../store/wikiStore';
+import { PageHistory } from './PageHistory';
 import './PageViewer.css';
 
 export function PageViewer() {
-  const { currentPage, currentWiki, loadPage } = useWikiStore();
+  const { currentPage, currentWiki, loadPage, deletePage } = useWikiStore();
+  const [showHistory, setShowHistory] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   if (!currentPage) {
     return (
@@ -36,6 +39,20 @@ export function PageViewer() {
     } else {
       // External link - open in new tab
       window.open(href, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!currentWiki || !currentPage) return;
+    
+    if (confirm(`Are you sure you want to delete "${currentPage.path}"? This page can be restored from the admin panel.`)) {
+      setIsDeleting(true);
+      try {
+        await deletePage(currentWiki.id, currentPage.path);
+      } catch (error) {
+        // Error is already shown by the store
+        setIsDeleting(false);
+      }
     }
   };
 
@@ -77,8 +94,33 @@ export function PageViewer() {
         <div className="page-meta">
           <span>Last updated by {currentPage.updated_by}</span>
           <span>{new Date(currentPage.updated_at).toLocaleString()}</span>
+          <div className="page-actions">
+            <button 
+              className="history-btn"
+              onClick={() => setShowHistory(true)}
+              title="View version history"
+            >
+              <span className="history-icon">🕐</span>
+            </button>
+            <button 
+              className="delete-btn"
+              onClick={handleDelete}
+              disabled={isDeleting}
+              title="Delete page"
+            >
+              {isDeleting ? '...' : '🗑️'}
+            </button>
+          </div>
         </div>
       </div>
+      
+      {showHistory && currentWiki && (
+        <PageHistory
+          wiki_id={currentWiki.id}
+          path={currentPage.path}
+          onClose={() => setShowHistory(false)}
+        />
+      )}
     </div>
   );
 }

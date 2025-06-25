@@ -141,9 +141,79 @@
 
 .page-meta {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
   color: var(--text-secondary);
   font-size: 0.875rem;
+  flex-wrap: nowrap;
+}
+
+.page-meta > span:first-child {
+  flex-shrink: 0;
+}
+
+.page-meta > span:nth-child(2) {
+  flex-shrink: 0;
+}
+
+.page-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.history-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.history-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--primary);
+}
+
+.history-icon {
+  font-size: 1.1rem;
+  display: inline-block;
+  transform: scaleX(-1);
+}
+
+.page-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.delete-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  font-size: 1rem;
+}
+
+.delete-btn:hover:not(:disabled) {
+  background: #fee;
+  color: #c00;
+  border-color: #c00;
+}
+
+.delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Dark mode adjustments */

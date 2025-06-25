@@ -243,6 +243,94 @@
   font-size: 0.9rem;
 }
 
+/* Section Header with toggle */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.section-header h3 {
+  margin: 0;
+}
+
+.toggle-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.75rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.toggle-btn:hover {
+  background: var(--surface);
+  color: var(--text-primary);
+  border-color: var(--primary);
+}
+
+.deleted-pages-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.deleted-page-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.deleted-page-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.page-path {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.deleted-meta {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.restore-btn {
+  padding: 0.5rem 1rem;
+  background: #27ae60;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background-color 0.2s;
+}
+
+.restore-btn:hover {
+  background: #219a52;
+}
+
+.restore-btn:disabled {
+  background: #95a5a6;
+  cursor: not-allowed;
+}
+
+.loading,
+.empty-message {
+  text-align: center;
+  padding: 1rem;
+  color: var(--text-secondary);
+}
+
 /* Dark mode adjustments */
 @media (prefers-color-scheme: dark) {
   .admin-view-container {

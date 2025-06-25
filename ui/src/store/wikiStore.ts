@@ -32,6 +32,7 @@ interface WikiStore {
   setSidebarCollapsed: (collapsed: boolean) => void;
   inviteUser: (wiki_id: string, invitee_id: string) => Promise<void>;
   manageMember: (wiki_id: string, member_id: string, action: 'add' | 'remove' | 'update', role?: WikiRole) => Promise<void>;
+  deletePage: (wiki_id: string, path: string) => Promise<void>;
   setError: (error: string | null) => void;
   clearError: () => void;
 }
@@ -195,6 +196,24 @@ export const useWikiStore = create<WikiStore>((set, get) => ({
 
   setSidebarCollapsed: (collapsed) => {
     set({ sidebarCollapsed: collapsed });
+  },
+
+  deletePage: async (wiki_id: string, path: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      await wikiApi.deletePage(wiki_id, path);
+      // Reload pages list
+      await get().loadPages(wiki_id);
+      // Clear current page if it was the deleted one
+      const { currentPage } = get();
+      if (currentPage && currentPage.path === path) {
+        set({ currentPage: null });
+      }
+      set({ isLoading: false });
+    } catch (error: any) {
+      set({ error: getErrorMessage(error, 'Failed to delete page'), isLoading: false });
+      throw error; // Re-throw so caller can handle
+    }
   },
 
   setError: (error) => {

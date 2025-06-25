@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Wiki, WikiRole } from '../api/wiki';
+import React, { useState, useEffect } from 'react';
+import { Wiki, WikiRole, DeletedPageSummary, wikiApi } from '../api/wiki';
 import { useWikiStore } from '../store/wikiStore';
 import './AdminView.css';
 
@@ -9,10 +9,14 @@ interface AdminViewProps {
 }
 
 export function AdminView({ wiki, onClose }: AdminViewProps) {
-  const { inviteUser, manageMember } = useWikiStore();
+  const { inviteUser, manageMember, loadPages } = useWikiStore();
   const [inviteUsername, setInviteUsername] = useState('');
   const [isInviting, setIsInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
+  const [deletedPages, setDeletedPages] = useState<DeletedPageSummary[]>([]);
+  const [showDeletedPages, setShowDeletedPages] = useState(false);
+  const [isLoadingDeleted, setIsLoadingDeleted] = useState(false);
+  const [restoringPage, setRestoringPage] = useState<string | null>(null);
 
   const handleInviteUser = async () => {
     if (!inviteUsername.trim()) return;
@@ -47,6 +51,43 @@ export function AdminView({ wiki, onClose }: AdminViewProps) {
       }
     }
   };
+
+  const loadDeletedPages = async () => {
+    setIsLoadingDeleted(true);
+    try {
+      const deleted = await wikiApi.listDeletedPages(wiki.id);
+      setDeletedPages(deleted);
+    } catch (error) {
+      console.error('Failed to load deleted pages:', error);
+    } finally {
+      setIsLoadingDeleted(false);
+    }
+  };
+
+  const handleRestorePage = async (page: DeletedPageSummary) => {
+    if (!confirm(`Are you sure you want to restore "${page.path}"?`)) {
+      return;
+    }
+
+    setRestoringPage(page.deleted_key);
+    try {
+      await wikiApi.restoreDeletedPage(wiki.id, page.path, page.deleted_key);
+      // Remove from deleted list
+      setDeletedPages(deletedPages.filter(p => p.deleted_key !== page.deleted_key));
+      // Reload pages in the wiki
+      await loadPages(wiki.id);
+    } catch (error: any) {
+      alert(`Failed to restore page: ${error.message || 'Unknown error'}`);
+    } finally {
+      setRestoringPage(null);
+    }
+  };
+
+  useEffect(() => {
+    if (showDeletedPages && deletedPages.length === 0 && !isLoadingDeleted) {
+      loadDeletedPages();
+    }
+  }, [showDeletedPages]);
 
   // Get current user's node ID
   const nodeId = window.our?.node || '';
@@ -162,6 +203,50 @@ export function AdminView({ wiki, onClose }: AdminViewProps) {
                 </span>
               </div>
             </div>
+          </div>
+          
+          {/* Deleted Pages Section */}
+          <div className="admin-section">
+            <div className="section-header">
+              <h3>Deleted Pages</h3>
+              <button 
+                className="toggle-btn"
+                onClick={() => setShowDeletedPages(!showDeletedPages)}
+                title={showDeletedPages ? "Hide deleted pages" : "Show deleted pages"}
+              >
+                {showDeletedPages ? '−' : '+'} {showDeletedPages ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            
+            {showDeletedPages && (
+              <>
+                {isLoadingDeleted ? (
+                  <div className="loading">Loading deleted pages...</div>
+                ) : deletedPages.length === 0 ? (
+                  <div className="empty-message">No deleted pages</div>
+                ) : (
+                  <div className="deleted-pages-list">
+                    {deletedPages.map((page) => (
+                      <div key={page.deleted_key} className="deleted-page-item">
+                        <div className="deleted-page-info">
+                          <span className="page-path">{page.path}</span>
+                          <span className="deleted-meta">
+                            Deleted by {page.deleted_by} on {new Date(page.deleted_at).toLocaleString()}
+                          </span>
+                        </div>
+                        <button
+                          className="restore-btn"
+                          onClick={() => handleRestorePage(page)}
+                          disabled={restoringPage === page.deleted_key}
+                        >
+                          {restoringPage === page.deleted_key ? 'Restoring...' : 'Restore'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </div>

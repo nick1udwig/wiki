@@ -38,9 +38,11 @@ struct Wiki {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PageVersion {
+    version_id: String, // UUID for the version
     content: Vec<u8>,
     updated_by: String, // Node ID of updater (e.g., "alice.os")
     updated_at: String,
+    commit_message: Option<String>, // Optional commit message describing the change
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +51,23 @@ struct WikiPage {
     wiki_id: String,
     current_version: PageVersion,
     yrs_doc: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PageHistory {
+    path: String,
+    wiki_id: String,
+    versions: Vec<PageVersion>, // All versions, ordered from oldest to newest
+    current_version_id: String, // ID of the current version
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeletedPage {
+    path: String,
+    wiki_id: String,
+    deleted_at: String,
+    deleted_by: String, // Node ID of deleter
+    history: PageHistory, // Full history preserved
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +95,8 @@ pub struct WikiState {
     node_id: String, // Our node ID (e.g., "alice.os"), NOT the full address
     wikis: HashMap<String, Wiki>,
     pages: HashMap<String, WikiPage>,
+    page_histories: HashMap<String, PageHistory>, // Key: "wiki_id:path"
+    deleted_pages: HashMap<String, DeletedPage>, // Key: "wiki_id:path:deleted_timestamp"
     my_memberships: Vec<WikiMembership>,
     invites: HashMap<String, WikiInvite>,
     #[serde(skip)]
@@ -127,6 +148,7 @@ struct CreatePageRequest {
     wiki_id: String,
     path: String,
     initial_content: String,
+    commit_message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +156,7 @@ struct UpdatePageRequest {
     wiki_id: String,
     path: String,
     content: String,
+    commit_message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +192,54 @@ struct GetPublicWikiRequest {
     wiki_id: String,
 }
 
+#[derive(Deserialize)]
+struct GetPageHistoryRequest {
+    wiki_id: String,
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct RestoreDeletedPageRequest {
+    wiki_id: String,
+    path: String,
+    deleted_key: String,
+}
+
+#[derive(Deserialize)]
+struct ListDeletedPagesRequest {
+    wiki_id: String,
+}
+
+#[derive(Deserialize)]
+struct GetVersionDiffRequest {
+    wiki_id: String,
+    path: String,
+    version1_id: String,
+    version2_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VersionDiff {
+    version1_id: String,
+    version2_id: String,
+    diff_lines: Vec<DiffLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DiffLine {
+    line_type: DiffLineType,
+    content: String,
+    line_number_old: Option<usize>,
+    line_number_new: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum DiffLineType {
+    Added,
+    Removed,
+    Unchanged,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum WikiMessage {
     FindWikisByUser { username: String },
@@ -177,8 +248,13 @@ enum WikiMessage {
     GetWikiData { wiki_id: String },
     GetWikiPages { wiki_id: String },
     GetWikiPage { wiki_id: String, path: String },
-    CreatePage { wiki_id: String, path: String, initial_content: String, user_id: String },
-    UpdatePage { wiki_id: String, path: String, content: String, user_id: String },
+    CreatePage { wiki_id: String, path: String, initial_content: String, user_id: String, commit_message: Option<String> },
+    UpdatePage { wiki_id: String, path: String, content: String, user_id: String, commit_message: Option<String> },
+    DeletePage { wiki_id: String, path: String, user_id: String },
+    GetPageHistory { wiki_id: String, path: String },
+    RestoreDeletedPage { wiki_id: String, path: String, deleted_key: String, user_id: String },
+    ListDeletedPages { wiki_id: String },
+    GetVersionDiff { wiki_id: String, path: String, version1_id: String, version2_id: String },
     SendInvite { invite: WikiInvite, wiki: Wiki },
     InviteResponse { invite_id: String, status: InviteStatus, invitee_id: String },
     RoleUpdate { wiki_id: String, member_id: String, new_role: WikiRole },
@@ -192,9 +268,21 @@ enum WikiResponse {
     WikiData(Wiki),
     PageList(Vec<PageSummary>),
     PageData(PageInfo),
+    PageHistory(PageHistory),
+    DecodedPageHistory(DecodedPageHistory),
+    DeletedPagesList(Vec<DeletedPageSummary>),
     SearchResults(Vec<SearchResult>),
+    VersionDiff(VersionDiff),
     Success(bool),
     Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeletedPageSummary {
+    path: String,
+    deleted_at: String,
+    deleted_by: String,
+    deleted_key: String, // Key for restoration
 }
 
 #[derive(Deserialize)]
@@ -259,6 +347,23 @@ struct PageInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct DecodedPageVersion {
+    version_id: String,
+    content: String, // Decoded text content
+    updated_by: String,
+    updated_at: String,
+    commit_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DecodedPageHistory {
+    path: String,
+    wiki_id: String,
+    versions: Vec<DecodedPageVersion>,
+    current_version_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PageSummary {
     path: String,
     updated_by: String,
@@ -282,6 +387,86 @@ struct InviteInfo {
     created_at: String,
     expires_at: String,
     is_expired: bool,
+}
+
+impl WikiState {
+    fn decode_yrs_content(&self, yrs_doc: &[u8]) -> Result<String, String> {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            if let Ok(update) = yrs::Update::decode_v1(yrs_doc) {
+                if let Err(e) = txn.apply_update(update) {
+                    return Err(format!("Failed to apply update: {}", e));
+                }
+            } else {
+                return Err("Failed to decode update".to_string());
+            }
+        }
+        let text = doc.get_or_insert_text("content");
+        let content = text.get_string(&doc.transact());
+        Ok(content)
+    }
+
+    fn calculate_diff(&self, text1: &str, text2: &str) -> Vec<DiffLine> {
+        let lines1: Vec<&str> = text1.lines().collect();
+        let lines2: Vec<&str> = text2.lines().collect();
+        let mut diff_lines = Vec::new();
+        
+        // Simple line-by-line diff algorithm
+        let _max_len = lines1.len().max(lines2.len());
+        let mut i = 0;
+        let mut j = 0;
+        
+        while i < lines1.len() || j < lines2.len() {
+            if i >= lines1.len() {
+                // All remaining lines in text2 are additions
+                diff_lines.push(DiffLine {
+                    line_type: DiffLineType::Added,
+                    content: lines2[j].to_string(),
+                    line_number_old: None,
+                    line_number_new: Some(j + 1),
+                });
+                j += 1;
+            } else if j >= lines2.len() {
+                // All remaining lines in text1 are deletions
+                diff_lines.push(DiffLine {
+                    line_type: DiffLineType::Removed,
+                    content: lines1[i].to_string(),
+                    line_number_old: Some(i + 1),
+                    line_number_new: None,
+                });
+                i += 1;
+            } else if lines1[i] == lines2[j] {
+                // Lines are the same
+                diff_lines.push(DiffLine {
+                    line_type: DiffLineType::Unchanged,
+                    content: lines1[i].to_string(),
+                    line_number_old: Some(i + 1),
+                    line_number_new: Some(j + 1),
+                });
+                i += 1;
+                j += 1;
+            } else {
+                // Lines are different - mark as removed then added
+                diff_lines.push(DiffLine {
+                    line_type: DiffLineType::Removed,
+                    content: lines1[i].to_string(),
+                    line_number_old: Some(i + 1),
+                    line_number_new: None,
+                });
+                diff_lines.push(DiffLine {
+                    line_type: DiffLineType::Added,
+                    content: lines2[j].to_string(),
+                    line_number_old: None,
+                    line_number_new: Some(j + 1),
+                });
+                i += 1;
+                j += 1;
+            }
+        }
+        
+        diff_lines
+    }
 }
 
 #[hyperprocess(
@@ -463,7 +648,7 @@ impl WikiState {
                     None => WikiResponse::Error("Wiki not found".to_string()),
                 }
             }
-            WikiMessage::CreatePage { wiki_id, path, initial_content, user_id } => {
+            WikiMessage::CreatePage { wiki_id, path, initial_content, user_id, commit_message } => {
                 match self.wikis.get_mut(&wiki_id) {
                     Some(wiki) => {
                         // Check if user has write permissions
@@ -484,18 +669,33 @@ impl WikiState {
                                 doc.transact().encode_state_as_update(&yrs::StateVector::default(), &mut encoder);
                                 let update = encoder.to_vec();
 
+                                // Create the first version
+                                let version_id = Uuid::new_v4().to_string();
+                                let first_version = PageVersion {
+                                    version_id: version_id.clone(),
+                                    content: update.clone(),
+                                    updated_by: user_id.clone(),
+                                    updated_at: Utc::now().to_rfc3339(),
+                                    commit_message,
+                                };
+
                                 let page = WikiPage {
                                     path: path.clone(),
                                     wiki_id: wiki_id.clone(),
-                                    current_version: PageVersion {
-                                        content: update.clone(),
-                                        updated_by: user_id.clone(),
-                                        updated_at: Utc::now().to_rfc3339(),
-                                    },
+                                    current_version: first_version.clone(),
                                     yrs_doc: update,
                                 };
 
+                                // Create page history
+                                let history = PageHistory {
+                                    path: path.clone(),
+                                    wiki_id: wiki_id.clone(),
+                                    versions: vec![first_version],
+                                    current_version_id: version_id,
+                                };
+
                                 self.pages.insert(page_key.clone(), page);
+                                self.page_histories.insert(page_key.clone(), history);
                                 self.active_docs.insert(page_key, doc);
 
                                 WikiResponse::Success(true)
@@ -506,13 +706,18 @@ impl WikiState {
                     None => WikiResponse::Error("Wiki not found".to_string()),
                 }
             }
-            WikiMessage::UpdatePage { wiki_id, path, content, user_id } => {
+            WikiMessage::UpdatePage { wiki_id, path, content, user_id, commit_message } => {
                 match self.wikis.get(&wiki_id) {
                     Some(wiki) => {
                         // Check if user has write permissions
                         match wiki.members.get(&user_id) {
                             Some(role) if matches!(role, WikiRole::Writer | WikiRole::Admin | WikiRole::SuperAdmin) => {
                                 let page_key = format!("{}:{}", wiki_id, path);
+
+                                // Check if page exists
+                                if !self.pages.contains_key(&page_key) {
+                                    return Ok(serde_json::to_vec(&WikiResponse::Error("Page not found".to_string())).unwrap());
+                                }
 
                                 let doc = self.active_docs.entry(page_key.clone())
                                     .or_insert_with(|| {
@@ -548,18 +753,224 @@ impl WikiState {
                                 doc.transact().encode_state_as_update(&yrs::StateVector::default(), &mut encoder);
                                 let update = encoder.to_vec();
 
+                                // Create new version
+                                let version_id = Uuid::new_v4().to_string();
+                                let new_version = PageVersion {
+                                    version_id: version_id.clone(),
+                                    content: update.clone(),
+                                    updated_by: user_id.clone(),
+                                    updated_at: Utc::now().to_rfc3339(),
+                                    commit_message,
+                                };
+
+                                // Update the page
                                 if let Some(page) = self.pages.get_mut(&page_key) {
-                                    page.current_version = PageVersion {
-                                        content: update.clone(),
-                                        updated_by: user_id.clone(),
-                                        updated_at: Utc::now().to_rfc3339(),
-                                    };
+                                    page.current_version = new_version.clone();
                                     page.yrs_doc = update;
+                                }
+
+                                // Update history
+                                if let Some(history) = self.page_histories.get_mut(&page_key) {
+                                    history.versions.push(new_version);
+                                    history.current_version_id = version_id;
+                                } else {
+                                    // If no history exists (shouldn't happen), create it
+                                    let history = PageHistory {
+                                        path: path.clone(),
+                                        wiki_id: wiki_id.clone(),
+                                        versions: vec![new_version],
+                                        current_version_id: version_id,
+                                    };
+                                    self.page_histories.insert(page_key.clone(), history);
                                 }
 
                                 WikiResponse::Success(true)
                             }
                             _ => WikiResponse::Error("Insufficient permissions".to_string()),
+                        }
+                    }
+                    None => WikiResponse::Error("Wiki not found".to_string()),
+                }
+            }
+            WikiMessage::DeletePage { wiki_id, path, user_id } => {
+                match self.wikis.get(&wiki_id) {
+                    Some(wiki) => {
+                        // Check if user has write permissions
+                        match wiki.members.get(&user_id) {
+                            Some(role) if matches!(role, WikiRole::Writer | WikiRole::Admin | WikiRole::SuperAdmin) => {
+                                let page_key = format!("{}:{}", wiki_id, path);
+
+                                // Check if page exists
+                                if let Some(_page) = self.pages.remove(&page_key) {
+                                    // Get the page history
+                                    if let Some(history) = self.page_histories.remove(&page_key) {
+                                        // Create deleted page entry
+                                        let deleted_key = format!("{}:{}:{}", wiki_id, path, Utc::now().timestamp());
+                                        let deleted_page = DeletedPage {
+                                            path: path.clone(),
+                                            wiki_id: wiki_id.clone(),
+                                            deleted_at: Utc::now().to_rfc3339(),
+                                            deleted_by: user_id.clone(),
+                                            history,
+                                        };
+                                        
+                                        self.deleted_pages.insert(deleted_key, deleted_page);
+                                    }
+                                    
+                                    // Remove from active docs
+                                    self.active_docs.remove(&page_key);
+                                    
+                                    WikiResponse::Success(true)
+                                } else {
+                                    WikiResponse::Error("Page not found".to_string())
+                                }
+                            }
+                            _ => WikiResponse::Error("Insufficient permissions".to_string()),
+                        }
+                    }
+                    None => WikiResponse::Error("Wiki not found".to_string()),
+                }
+            }
+            WikiMessage::GetPageHistory { wiki_id, path } => {
+                match self.wikis.get(&wiki_id) {
+                    Some(_wiki) => {
+                        let page_key = format!("{}:{}", wiki_id, path);
+                        if let Some(history) = self.page_histories.get(&page_key) {
+                            // Decode all versions
+                            let decoded_versions: Vec<DecodedPageVersion> = history.versions.iter()
+                                .map(|version| {
+                                    let content = match self.decode_yrs_content(&version.content) {
+                                        Ok(text) => text,
+                                        Err(_) => "[Failed to decode content]".to_string(),
+                                    };
+                                    DecodedPageVersion {
+                                        version_id: version.version_id.clone(),
+                                        content,
+                                        updated_by: version.updated_by.clone(),
+                                        updated_at: version.updated_at.clone(),
+                                        commit_message: version.commit_message.clone(),
+                                    }
+                                })
+                                .collect();
+                            
+                            let decoded_history = DecodedPageHistory {
+                                path: history.path.clone(),
+                                wiki_id: history.wiki_id.clone(),
+                                versions: decoded_versions,
+                                current_version_id: history.current_version_id.clone(),
+                            };
+                            
+                            WikiResponse::DecodedPageHistory(decoded_history)
+                        } else {
+                            WikiResponse::Error("Page history not found".to_string())
+                        }
+                    }
+                    None => WikiResponse::Error("Wiki not found".to_string()),
+                }
+            }
+            WikiMessage::RestoreDeletedPage { wiki_id, path, deleted_key, user_id } => {
+                match self.wikis.get(&wiki_id) {
+                    Some(wiki) => {
+                        // Check if user has write permissions
+                        match wiki.members.get(&user_id) {
+                            Some(role) if matches!(role, WikiRole::Writer | WikiRole::Admin | WikiRole::SuperAdmin) => {
+                                if let Some(deleted_page) = self.deleted_pages.remove(&deleted_key) {
+                                    // Check if this is the right page
+                                    if deleted_page.wiki_id != wiki_id || deleted_page.path != path {
+                                        self.deleted_pages.insert(deleted_key, deleted_page);
+                                        return Ok(serde_json::to_vec(&WikiResponse::Error("Deleted page key mismatch".to_string())).unwrap());
+                                    }
+                                    
+                                    let page_key = format!("{}:{}", wiki_id, path);
+                                    
+                                    // Check if page already exists
+                                    if self.pages.contains_key(&page_key) {
+                                        self.deleted_pages.insert(deleted_key, deleted_page);
+                                        return Ok(serde_json::to_vec(&WikiResponse::Error("Page already exists".to_string())).unwrap());
+                                    }
+                                    
+                                    // Restore the page with its latest version
+                                    let history = deleted_page.history;
+                                    if let Some(latest_version) = history.versions.last() {
+                                        let page = WikiPage {
+                                            path: path.clone(),
+                                            wiki_id: wiki_id.clone(),
+                                            current_version: latest_version.clone(),
+                                            yrs_doc: latest_version.content.clone(),
+                                        };
+                                        
+                                        self.pages.insert(page_key.clone(), page);
+                                        self.page_histories.insert(page_key, history);
+                                        
+                                        WikiResponse::Success(true)
+                                    } else {
+                                        WikiResponse::Error("No versions found in deleted page".to_string())
+                                    }
+                                } else {
+                                    WikiResponse::Error("Deleted page not found".to_string())
+                                }
+                            }
+                            _ => WikiResponse::Error("Insufficient permissions".to_string()),
+                        }
+                    }
+                    None => WikiResponse::Error("Wiki not found".to_string()),
+                }
+            }
+            WikiMessage::ListDeletedPages { wiki_id } => {
+                match self.wikis.get(&wiki_id) {
+                    Some(_wiki) => {
+                        let mut deleted_summaries = Vec::new();
+                        for (key, deleted_page) in &self.deleted_pages {
+                            if deleted_page.wiki_id == wiki_id {
+                                deleted_summaries.push(DeletedPageSummary {
+                                    path: deleted_page.path.clone(),
+                                    deleted_at: deleted_page.deleted_at.clone(),
+                                    deleted_by: deleted_page.deleted_by.clone(),
+                                    deleted_key: key.clone(),
+                                });
+                            }
+                        }
+                        WikiResponse::DeletedPagesList(deleted_summaries)
+                    }
+                    None => WikiResponse::Error("Wiki not found".to_string()),
+                }
+            }
+            WikiMessage::GetVersionDiff { wiki_id, path, version1_id, version2_id } => {
+                match self.wikis.get(&wiki_id) {
+                    Some(_wiki) => {
+                        let page_key = format!("{}:{}", wiki_id, path);
+                        if let Some(history) = self.page_histories.get(&page_key) {
+                            // Find the two versions
+                            let version1 = history.versions.iter().find(|v| v.version_id == version1_id);
+                            let version2 = history.versions.iter().find(|v| v.version_id == version2_id);
+                            
+                            match (version1, version2) {
+                                (Some(v1), Some(v2)) => {
+                                    // Decode content for both versions
+                                    let content1 = match self.decode_yrs_content(&v1.content) {
+                                        Ok(text) => text,
+                                        Err(_) => return Ok(serde_json::to_vec(&WikiResponse::Error("Failed to decode version 1 content".to_string())).unwrap()),
+                                    };
+                                    let content2 = match self.decode_yrs_content(&v2.content) {
+                                        Ok(text) => text,
+                                        Err(_) => return Ok(serde_json::to_vec(&WikiResponse::Error("Failed to decode version 2 content".to_string())).unwrap()),
+                                    };
+                                    
+                                    // Calculate diff
+                                    let diff_lines = self.calculate_diff(&content1, &content2);
+                                    
+                                    let version_diff = VersionDiff {
+                                        version1_id: version1_id.clone(),
+                                        version2_id: version2_id.clone(),
+                                        diff_lines,
+                                    };
+                                    
+                                    WikiResponse::VersionDiff(version_diff)
+                                }
+                                _ => WikiResponse::Error("One or both versions not found".to_string()),
+                            }
+                        } else {
+                            WikiResponse::Error("Page history not found".to_string())
                         }
                     }
                     None => WikiResponse::Error("Wiki not found".to_string()),
@@ -1130,6 +1541,7 @@ impl WikiState {
                     path: req.path.clone(),
                     initial_content: req.initial_content.clone(),
                     user_id: self.node_id.clone(),
+                    commit_message: req.commit_message.clone(),
                 };
 
                 let message_body = serde_json::to_string(&message)
@@ -1182,18 +1594,33 @@ impl WikiState {
         doc.transact().encode_state_as_update(&yrs::StateVector::default(), &mut encoder);
         let update = encoder.to_vec();
 
+        // Create the first version
+        let version_id = Uuid::new_v4().to_string();
+        let first_version = PageVersion {
+            version_id: version_id.clone(),
+            content: update.clone(),
+            updated_by: self.node_id.clone(),
+            updated_at: Utc::now().to_rfc3339(),
+            commit_message: req.commit_message,
+        };
+
         let page = WikiPage {
             path: title.clone(),
             wiki_id: req.wiki_id.clone(),
-            current_version: PageVersion {
-                content: update.clone(),
-                updated_by: self.node_id.clone(),
-                updated_at: Utc::now().to_rfc3339(),
-            },
+            current_version: first_version.clone(),
             yrs_doc: update,
         };
 
+        // Create page history
+        let history = PageHistory {
+            path: title.clone(),
+            wiki_id: req.wiki_id.clone(),
+            versions: vec![first_version],
+            current_version_id: version_id,
+        };
+
         self.pages.insert(page_key.clone(), page);
+        self.page_histories.insert(page_key.clone(), history);
         self.active_docs.insert(page_key, doc);
 
         Ok(serde_json::to_string(&CreatePageResponse {
@@ -1221,6 +1648,7 @@ impl WikiState {
                     path: req.path.clone(),
                     content: req.content.clone(),
                     user_id: self.node_id.clone(),
+                    commit_message: req.commit_message.clone(),
                 };
 
                 let message_body = serde_json::to_string(&message)
@@ -1313,16 +1741,56 @@ impl WikiState {
         doc.transact().encode_state_as_update(&yrs::StateVector::default(), &mut encoder);
         let update = encoder.to_vec();
 
+        // Create new version
+        let version_id = Uuid::new_v4().to_string();
+        let new_version = PageVersion {
+            version_id: version_id.clone(),
+            content: update.clone(),
+            updated_by: self.node_id.clone(),
+            updated_at: Utc::now().to_rfc3339(),
+            commit_message: req.commit_message,
+        };
+
         let page = WikiPage {
             path: new_title.clone(),
             wiki_id: req.wiki_id.clone(),
-            current_version: PageVersion {
-                content: update.clone(),
-                updated_by: self.node_id.clone(),
-                updated_at: Utc::now().to_rfc3339(),
-            },
+            current_version: new_version.clone(),
             yrs_doc: update,
         };
+
+        // Handle history - if title changed, we need to move the history
+        if title_changed {
+            if let Some(mut history) = self.page_histories.remove(&old_page_key) {
+                history.path = new_title.clone();
+                history.versions.push(new_version);
+                history.current_version_id = version_id;
+                self.page_histories.insert(new_page_key.clone(), history);
+            } else {
+                // Create new history if it doesn't exist
+                let history = PageHistory {
+                    path: new_title.clone(),
+                    wiki_id: req.wiki_id.clone(),
+                    versions: vec![new_version],
+                    current_version_id: version_id,
+                };
+                self.page_histories.insert(new_page_key.clone(), history);
+            }
+        } else {
+            // Update existing history
+            if let Some(history) = self.page_histories.get_mut(&old_page_key) {
+                history.versions.push(new_version);
+                history.current_version_id = version_id;
+            } else {
+                // Create new history if it doesn't exist
+                let history = PageHistory {
+                    path: new_title.clone(),
+                    wiki_id: req.wiki_id.clone(),
+                    versions: vec![new_version],
+                    current_version_id: version_id,
+                };
+                self.page_histories.insert(old_page_key.clone(), history);
+            }
+        }
 
         // Insert with new key
         self.pages.insert(new_page_key.clone(), page);
@@ -1481,14 +1949,78 @@ impl WikiState {
     async fn delete_page(&mut self, body: String) -> Result<String, String> {
         let req: DeletePageRequest = serde_json::from_str(&body)
             .map_err(|e| format!("Invalid request: {}", e))?;
+
+        // Check if this is a remote wiki
+        if req.wiki_id.contains('@') {
+            let parts: Vec<&str> = req.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+
+                // Send delete page request to remote node
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::DeletePage {
+                    wiki_id: wiki_id.to_string(),
+                    path: req.path.clone(),
+                    user_id: self.node_id.clone(),
+                };
+
+                let message_body = serde_json::to_string(&message)
+                    .map_err(|e| format!("Failed to serialize message: {}", e))?
+                    .into_bytes();
+
+                match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                    Ok(Ok(response_bytes)) => {
+                        let response_str = String::from_utf8(response_bytes)
+                            .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                        match serde_json::from_str::<WikiResponse>(&response_str) {
+                            Ok(WikiResponse::Success(true)) => {
+                                return Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap());
+                            }
+                            Ok(WikiResponse::Error(err)) => {
+                                return Err(format!("Remote error: {}", err));
+                            }
+                            _ => {
+                                return Err("Unexpected response from remote node".to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err("Failed to delete page on remote wiki".to_string());
+                    }
+                }
+            }
+        }
+
+        // Local wiki handling
         self.check_permission(&req.wiki_id, WikiRole::Writer)?;
 
         let page_key = format!("{}:{}", req.wiki_id, req.path);
 
-        self.pages.remove(&page_key);
-        self.active_docs.remove(&page_key);
-
-        Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap())
+        // Check if page exists
+        if let Some(_page) = self.pages.remove(&page_key) {
+            // Get the page history
+            if let Some(history) = self.page_histories.remove(&page_key) {
+                // Create deleted page entry
+                let deleted_key = format!("{}:{}:{}", req.wiki_id, req.path, Utc::now().timestamp());
+                let deleted_page = DeletedPage {
+                    path: req.path.clone(),
+                    wiki_id: req.wiki_id.clone(),
+                    deleted_at: Utc::now().to_rfc3339(),
+                    deleted_by: self.node_id.clone(),
+                    history,
+                };
+                
+                self.deleted_pages.insert(deleted_key, deleted_page);
+            }
+            
+            // Remove from active docs
+            self.active_docs.remove(&page_key);
+            
+            Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap())
+        } else {
+            Err("Page not found".to_string())
+        }
     }
 
     #[http]
@@ -1627,6 +2159,324 @@ impl WikiState {
                 }
             }
             _ => Err("Invalid message type".to_string()),
+        }
+    }
+
+    #[http]
+    async fn get_page_history(&mut self, body: String) -> Result<String, String> {
+        let req: GetPageHistoryRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("Invalid request: {}", e))?;
+
+        // Check if this is a remote wiki
+        if req.wiki_id.contains('@') {
+            let parts: Vec<&str> = req.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+
+                // Send get page history request to remote node
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::GetPageHistory {
+                    wiki_id: wiki_id.to_string(),
+                    path: req.path.clone(),
+                };
+
+                let message_body = serde_json::to_string(&message)
+                    .map_err(|e| format!("Failed to serialize message: {}", e))?
+                    .into_bytes();
+
+                match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                    Ok(Ok(response_bytes)) => {
+                        let response_str = String::from_utf8(response_bytes)
+                            .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                        match serde_json::from_str::<WikiResponse>(&response_str) {
+                            Ok(WikiResponse::DecodedPageHistory(history)) => {
+                                return Ok(serde_json::to_string(&history).unwrap());
+                            }
+                            Ok(WikiResponse::PageHistory(history)) => {
+                                return Ok(serde_json::to_string(&history).unwrap());
+                            }
+                            Ok(WikiResponse::Error(err)) => {
+                                return Err(format!("Remote error: {}", err));
+                            }
+                            _ => {
+                                return Err("Unexpected response from remote node".to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err("Failed to get page history from remote wiki".to_string());
+                    }
+                }
+            }
+        }
+
+        // Local wiki handling
+        self.check_permission(&req.wiki_id, WikiRole::Reader)?;
+
+        let page_key = format!("{}:{}", req.wiki_id, req.path);
+        if let Some(history) = self.page_histories.get(&page_key) {
+            // Decode all versions
+            let decoded_versions: Vec<DecodedPageVersion> = history.versions.iter()
+                .map(|version| {
+                    let content = match self.decode_yrs_content(&version.content) {
+                        Ok(text) => text,
+                        Err(_) => "[Failed to decode content]".to_string(),
+                    };
+                    DecodedPageVersion {
+                        version_id: version.version_id.clone(),
+                        content,
+                        updated_by: version.updated_by.clone(),
+                        updated_at: version.updated_at.clone(),
+                        commit_message: version.commit_message.clone(),
+                    }
+                })
+                .collect();
+            
+            let decoded_history = DecodedPageHistory {
+                path: history.path.clone(),
+                wiki_id: history.wiki_id.clone(),
+                versions: decoded_versions,
+                current_version_id: history.current_version_id.clone(),
+            };
+            
+            Ok(serde_json::to_string(&decoded_history).unwrap())
+        } else {
+            Err("Page history not found".to_string())
+        }
+    }
+
+    #[http]
+    async fn list_deleted_pages(&mut self, body: String) -> Result<String, String> {
+        let req: ListDeletedPagesRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("Invalid request: {}", e))?;
+
+        // Check if this is a remote wiki
+        if req.wiki_id.contains('@') {
+            let parts: Vec<&str> = req.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+
+                // Send list deleted pages request to remote node
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::ListDeletedPages {
+                    wiki_id: wiki_id.to_string(),
+                };
+
+                let message_body = serde_json::to_string(&message)
+                    .map_err(|e| format!("Failed to serialize message: {}", e))?
+                    .into_bytes();
+
+                match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                    Ok(Ok(response_bytes)) => {
+                        let response_str = String::from_utf8(response_bytes)
+                            .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                        match serde_json::from_str::<WikiResponse>(&response_str) {
+                            Ok(WikiResponse::DeletedPagesList(pages)) => {
+                                return Ok(serde_json::to_string(&pages).unwrap());
+                            }
+                            Ok(WikiResponse::Error(err)) => {
+                                return Err(format!("Remote error: {}", err));
+                            }
+                            _ => {
+                                return Err("Unexpected response from remote node".to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err("Failed to list deleted pages from remote wiki".to_string());
+                    }
+                }
+            }
+        }
+
+        // Local wiki handling
+        self.check_permission(&req.wiki_id, WikiRole::Reader)?;
+
+        let mut deleted_summaries = Vec::new();
+        for (key, deleted_page) in &self.deleted_pages {
+            if deleted_page.wiki_id == req.wiki_id {
+                deleted_summaries.push(DeletedPageSummary {
+                    path: deleted_page.path.clone(),
+                    deleted_at: deleted_page.deleted_at.clone(),
+                    deleted_by: deleted_page.deleted_by.clone(),
+                    deleted_key: key.clone(),
+                });
+            }
+        }
+
+        Ok(serde_json::to_string(&deleted_summaries).unwrap())
+    }
+
+    #[http]
+    async fn restore_deleted_page(&mut self, body: String) -> Result<String, String> {
+        let req: RestoreDeletedPageRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("Invalid request: {}", e))?;
+
+        // Check if this is a remote wiki
+        if req.wiki_id.contains('@') {
+            let parts: Vec<&str> = req.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+
+                // Send restore deleted page request to remote node
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::RestoreDeletedPage {
+                    wiki_id: wiki_id.to_string(),
+                    path: req.path.clone(),
+                    deleted_key: req.deleted_key.clone(),
+                    user_id: self.node_id.clone(),
+                };
+
+                let message_body = serde_json::to_string(&message)
+                    .map_err(|e| format!("Failed to serialize message: {}", e))?
+                    .into_bytes();
+
+                match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                    Ok(Ok(response_bytes)) => {
+                        let response_str = String::from_utf8(response_bytes)
+                            .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                        match serde_json::from_str::<WikiResponse>(&response_str) {
+                            Ok(WikiResponse::Success(true)) => {
+                                return Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap());
+                            }
+                            Ok(WikiResponse::Error(err)) => {
+                                return Err(format!("Remote error: {}", err));
+                            }
+                            _ => {
+                                return Err("Unexpected response from remote node".to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err("Failed to restore deleted page on remote wiki".to_string());
+                    }
+                }
+            }
+        }
+
+        // Local wiki handling
+        self.check_permission(&req.wiki_id, WikiRole::Writer)?;
+
+        if let Some(deleted_page) = self.deleted_pages.remove(&req.deleted_key) {
+            // Check if this is the right page
+            if deleted_page.wiki_id != req.wiki_id || deleted_page.path != req.path {
+                self.deleted_pages.insert(req.deleted_key, deleted_page);
+                return Err("Deleted page key mismatch".to_string());
+            }
+            
+            let page_key = format!("{}:{}", req.wiki_id, req.path);
+            
+            // Check if page already exists
+            if self.pages.contains_key(&page_key) {
+                self.deleted_pages.insert(req.deleted_key, deleted_page);
+                return Err("Page already exists".to_string());
+            }
+            
+            // Restore the page with its latest version
+            let history = deleted_page.history;
+            if let Some(latest_version) = history.versions.last() {
+                let page = WikiPage {
+                    path: req.path.clone(),
+                    wiki_id: req.wiki_id.clone(),
+                    current_version: latest_version.clone(),
+                    yrs_doc: latest_version.content.clone(),
+                };
+                
+                self.pages.insert(page_key.clone(), page);
+                self.page_histories.insert(page_key, history);
+                
+                Ok(serde_json::to_string(&SuccessResponse { success: true }).unwrap())
+            } else {
+                Err("No versions found in deleted page".to_string())
+            }
+        } else {
+            Err("Deleted page not found".to_string())
+        }
+    }
+
+    #[http]
+    async fn get_version_diff(&mut self, body: String) -> Result<String, String> {
+        let req: GetVersionDiffRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("Invalid request: {}", e))?;
+
+        // Check if this is a remote wiki
+        if req.wiki_id.contains('@') {
+            let parts: Vec<&str> = req.wiki_id.split('@').collect();
+            if parts.len() == 2 {
+                let wiki_id = parts[0];
+                let node_id = parts[1];
+
+                // Send get version diff request to remote node
+                let target_address = Address::new(node_id, ("wiki", "wiki", "sys"));
+                let message = WikiMessage::GetVersionDiff {
+                    wiki_id: wiki_id.to_string(),
+                    path: req.path.clone(),
+                    version1_id: req.version1_id.clone(),
+                    version2_id: req.version2_id.clone(),
+                };
+
+                let message_body = serde_json::to_string(&message)
+                    .map_err(|e| format!("Failed to serialize message: {}", e))?
+                    .into_bytes();
+
+                match caller_utils::wiki::handle_wiki_message_remote_rpc(&target_address, message_body).await {
+                    Ok(Ok(response_bytes)) => {
+                        let response_str = String::from_utf8(response_bytes)
+                            .map_err(|e| format!("Failed to convert response to string: {}", e))?;
+                        match serde_json::from_str::<WikiResponse>(&response_str) {
+                            Ok(WikiResponse::VersionDiff(diff)) => {
+                                return Ok(serde_json::to_string(&diff).unwrap());
+                            }
+                            Ok(WikiResponse::Error(err)) => {
+                                return Err(format!("Remote error: {}", err));
+                            }
+                            _ => {
+                                return Err("Unexpected response from remote node".to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err("Failed to get version diff from remote wiki".to_string());
+                    }
+                }
+            }
+        }
+
+        // Local wiki handling
+        self.check_permission(&req.wiki_id, WikiRole::Reader)?;
+
+        let page_key = format!("{}:{}", req.wiki_id, req.path);
+        if let Some(history) = self.page_histories.get(&page_key) {
+            // Find the two versions
+            let version1 = history.versions.iter().find(|v| v.version_id == req.version1_id);
+            let version2 = history.versions.iter().find(|v| v.version_id == req.version2_id);
+            
+            match (version1, version2) {
+                (Some(v1), Some(v2)) => {
+                    // Decode content for both versions
+                    let content1 = self.decode_yrs_content(&v1.content)
+                        .map_err(|_| "Failed to decode version 1 content".to_string())?;
+                    let content2 = self.decode_yrs_content(&v2.content)
+                        .map_err(|_| "Failed to decode version 2 content".to_string())?;
+                    
+                    // Calculate diff
+                    let diff_lines = self.calculate_diff(&content1, &content2);
+                    
+                    let version_diff = VersionDiff {
+                        version1_id: req.version1_id.clone(),
+                        version2_id: req.version2_id.clone(),
+                        diff_lines,
+                    };
+                    
+                    Ok(serde_json::to_string(&version_diff).unwrap())
+                }
+                _ => Err("One or both versions not found".to_string()),
+            }
+        } else {
+            Err("Page history not found".to_string())
         }
     }
 
